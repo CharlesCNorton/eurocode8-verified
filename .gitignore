@@ -3,6 +3,8 @@
 *.vos
 *.glob
 .*.aux
+eurocode8.ml
+*.mli
 *.cmi
 *.cmo
 *.cmx

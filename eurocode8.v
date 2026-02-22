@@ -2,7 +2,7 @@
 (*                                                                            *)
 (*          Eurocode 8: Seismic Design Verification Predicates                *)
 (*                                                                            *)
-(*     Formalizes EN 1998-1-1:2024 seismic action definitions, response       *)
+(*     Formalizes EN 1998-1:2004 seismic action definitions, response       *)
 (*     spectrum construction, lateral force method, and ductility class        *)
 (*     compliance checks. Structural safety as decidable predicates.          *)
 (*                                                                            *)
@@ -22,21 +22,21 @@ Import ListNotations.
 Open Scope R_scope.
 
 (* ================================================================ *)
-(*  GROUND TYPES — EN 1998-1-1:2024, clause 3.1.2                  *)
+(*  GROUND TYPES — EN 1998-1:2004, clause 3.1.2                  *)
 (* ================================================================ *)
 
 Inductive ground_type : Type :=
   | GroundA | GroundB | GroundC | GroundD | GroundE.
 
 (* ================================================================ *)
-(*  SPECTRUM TYPES — EN 1998-1-1:2024, clause 3.2.2.2              *)
+(*  SPECTRUM TYPES — EN 1998-1:2004, clause 3.2.2.2              *)
 (* ================================================================ *)
 
 Inductive spectrum_type : Type :=
   | Type1 | Type2.
 
 (* ================================================================ *)
-(*  IMPORTANCE CLASSES — EN 1998-1-1:2024, clause 4.2.5            *)
+(*  IMPORTANCE CLASSES — EN 1998-1:2004, clause 4.2.5            *)
 (* ================================================================ *)
 
 Inductive importance_class : Type :=
@@ -102,18 +102,20 @@ Definition eta_valid (eta : R) : Prop := eta >= eta_min.
 (* Se(T) for given spectrum parameters, reference PGA ag, and       *)
 (* damping correction factor eta (eta = 1 for 5% damping).         *)
 
-(* Se assumes T >= 0.  The compliance predicate enforces T1 > 0 via  *)
-(* well_formed_building, so negative periods cannot reach Se through  *)
-(* the verified pipeline.                                             *)
+(* Se(T) is guarded: returns 0 for T < 0.  The standard defines Se    *)
+(* only for T >= 0; the guard prevents physically meaningless results. *)
 Definition Se (p : spectrum_params) (ag eta T : R) : R :=
-  if Rle_dec T (sp_TB p) then
-    ag * sp_S p * (1 + T / sp_TB p * (eta * (5 / 2) - 1))
-  else if Rle_dec T (sp_TC p) then
-    ag * sp_S p * eta * (5 / 2)
-  else if Rle_dec T (sp_TD p) then
-    ag * sp_S p * eta * (5 / 2) * (sp_TC p / T)
+  if Rle_dec 0 T then
+    if Rle_dec T (sp_TB p) then
+      ag * sp_S p * (1 + T / sp_TB p * (eta * (5 / 2) - 1))
+    else if Rle_dec T (sp_TC p) then
+      ag * sp_S p * eta * (5 / 2)
+    else if Rle_dec T (sp_TD p) then
+      ag * sp_S p * eta * (5 / 2) * (sp_TC p / T)
+    else
+      ag * sp_S p * eta * (5 / 2) * (sp_TC p * sp_TD p / (T * T))
   else
-    ag * sp_S p * eta * (5 / 2) * (sp_TC p * sp_TD p / (T * T)).
+    0.
 
 (* ================================================================ *)
 (*  SPECTRUM PROPERTIES                                              *)
@@ -126,6 +128,7 @@ Lemma Se_at_zero : forall p ag eta,
 Proof.
   intros p ag eta HTB.
   unfold Se.
+  destruct (Rle_dec 0 0) as [H0|H0]; [|exfalso; lra].
   destruct (Rle_dec 0 (sp_TB p)) as [H|H].
   - field. lra.
   - exfalso. lra.
@@ -139,6 +142,7 @@ Lemma Se_at_TB : forall p ag eta,
 Proof.
   intros p ag eta HTB.
   unfold Se.
+  destruct (Rle_dec 0 (sp_TB p)) as [H0|H0]; [|exfalso; lra].
   destruct (Rle_dec (sp_TB p) (sp_TB p)) as [H|H].
   - field. lra.
   - exfalso. lra.
@@ -146,11 +150,13 @@ Qed.
 
 (* Se at T = TC equals the plateau value (branch 2 evaluation).       *)
 Lemma Se_at_TC : forall p ag eta,
+  sp_TB p > 0 ->
   sp_TB p < sp_TC p ->
   Se p ag eta (sp_TC p) = ag * sp_S p * eta * (5 / 2).
 Proof.
-  intros p ag eta H.
+  intros p ag eta HTB H.
   unfold Se.
+  destruct (Rle_dec 0 (sp_TC p)) as [H0|H0]; [|exfalso; lra].
   destruct (Rle_dec (sp_TC p) (sp_TB p)) as [H1|H1].
   - exfalso. lra.
   - destruct (Rle_dec (sp_TC p) (sp_TC p)) as [H2|H2].
@@ -167,6 +173,7 @@ Lemma Se_branch_agreement_at_TC : forall p ag eta,
 Proof.
   intros p ag eta HTB HTC.
   unfold Se.
+  destruct (Rle_dec 0 (sp_TC p)) as [H0|H0]; [|exfalso; lra].
   destruct (Rle_dec (sp_TC p) (sp_TB p)) as [H1|H1].
   - exfalso. lra.
   - destruct (Rle_dec (sp_TC p) (sp_TC p)) as [H2|H2].
@@ -176,13 +183,15 @@ Qed.
 
 (* Se at T = TD equals the descending-branch value ag*S*eta*2.5*TC/TD. *)
 Lemma Se_at_TD : forall p ag eta,
+  sp_TB p > 0 ->
   sp_TB p < sp_TD p ->
   sp_TC p < sp_TD p ->
   Se p ag eta (sp_TD p) =
     ag * sp_S p * eta * (5 / 2) * (sp_TC p / sp_TD p).
 Proof.
-  intros p ag eta HTB HTC.
+  intros p ag eta HTB_pos HTB HTC.
   unfold Se.
+  destruct (Rle_dec 0 (sp_TD p)) as [H0|H0]; [|exfalso; lra].
   destruct (Rle_dec (sp_TD p) (sp_TB p)) as [H1|H1].
   - exfalso. lra.
   - destruct (Rle_dec (sp_TD p) (sp_TC p)) as [H2|H2].
@@ -202,6 +211,7 @@ Lemma Se_branch_agreement_at_TD : forall p ag eta,
 Proof.
   intros p ag eta HTB HTC HTD.
   unfold Se.
+  destruct (Rle_dec 0 (sp_TD p)) as [H0|H0]; [|exfalso; lra].
   destruct (Rle_dec (sp_TD p) (sp_TB p)) as [H1|H1].
   - exfalso. lra.
   - destruct (Rle_dec (sp_TD p) (sp_TC p)) as [H2|H2].
@@ -223,6 +233,8 @@ Lemma Se_increasing : forall p ag eta T1 T2,
 Proof.
   intros p ag eta T1 T2 Hag HS Heta HTB HT1 HT12 HT2.
   unfold Se.
+  destruct (Rle_dec 0 T1) as [HT1g|HT1g]; [|exfalso; lra].
+  destruct (Rle_dec 0 T2) as [HT2g|HT2g]; [|exfalso; lra].
   destruct (Rle_dec T1 (sp_TB p)) as [H1|H1]; [|lra].
   destruct (Rle_dec T2 (sp_TB p)) as [H2|H2]; [|lra].
   apply Rmult_lt_compat_l.
@@ -237,11 +249,13 @@ Qed.
 
 (* Se is constant (plateau) on (TB, TC].                             *)
 Lemma Se_plateau : forall p ag eta T,
+  sp_TB p > 0 ->
   sp_TB p < T -> T <= sp_TC p ->
   Se p ag eta T = ag * sp_S p * eta * (5 / 2).
 Proof.
-  intros p ag eta T HTB HTC.
+  intros p ag eta T HTB_pos HTB HTC.
   unfold Se.
+  destruct (Rle_dec 0 T) as [H0|H0]; [|exfalso; lra].
   destruct (Rle_dec T (sp_TB p)); [lra|].
   destruct (Rle_dec T (sp_TC p)); [reflexivity|lra].
 Qed.
@@ -257,12 +271,14 @@ Proof.
   assert (HSeT1: Se p ag eta T1 =
     ag * sp_S p * eta * (5 / 2) * (sp_TC p / T1)).
   { unfold Se.
+    destruct (Rle_dec 0 T1); [|exfalso; lra].
     destruct (Rle_dec T1 (sp_TB p)); [lra|].
     destruct (Rle_dec T1 (sp_TC p)); [lra|].
     destruct (Rle_dec T1 (sp_TD p)); [reflexivity|lra]. }
   assert (HSeT2: Se p ag eta T2 =
     ag * sp_S p * eta * (5 / 2) * (sp_TC p / T2)).
   { unfold Se.
+    destruct (Rle_dec 0 T2); [|exfalso; lra].
     destruct (Rle_dec T2 (sp_TB p)); [lra|].
     destruct (Rle_dec T2 (sp_TC p)); [lra|].
     destruct (Rle_dec T2 (sp_TD p)); [reflexivity|lra]. }
@@ -290,6 +306,7 @@ Proof.
   assert (HSeT1: Se p ag eta T1 =
     ag * sp_S p * eta * (5 / 2) * (sp_TC p * sp_TD p / (T1 * T1))).
   { unfold Se.
+    destruct (Rle_dec 0 T1); [|exfalso; lra].
     destruct (Rle_dec T1 (sp_TB p)); [lra|].
     destruct (Rle_dec T1 (sp_TC p)); [lra|].
     destruct (Rle_dec T1 (sp_TD p)); [lra|].
@@ -297,6 +314,7 @@ Proof.
   assert (HSeT2: Se p ag eta T2 =
     ag * sp_S p * eta * (5 / 2) * (sp_TC p * sp_TD p / (T2 * T2))).
   { unfold Se.
+    destruct (Rle_dec 0 T2); [|exfalso; lra].
     destruct (Rle_dec T2 (sp_TB p)); [lra|].
     destruct (Rle_dec T2 (sp_TC p)); [lra|].
     destruct (Rle_dec T2 (sp_TD p)); [lra|].
@@ -325,6 +343,7 @@ Lemma Se_nonneg : forall p ag eta T,
 Proof.
   intros p ag eta T [HS [HTB [HTBC HTCD]]] Hag Heta HT Heta25.
   unfold Se.
+  destruct (Rle_dec 0 T) as [HT0|HT0]; [|exfalso; lra].
   destruct (Rle_dec T (sp_TB p)).
   - apply Rle_ge. apply Rmult_le_pos.
     + apply Rmult_le_pos; lra.
@@ -354,14 +373,14 @@ Proof.
 Qed.
 
 (* ================================================================ *)
-(*  DUCTILITY CLASSES — EN 1998-1-1:2024, clause 5.2.1              *)
+(*  DUCTILITY CLASSES — EN 1998-1:2004, clause 5.2.1              *)
 (* ================================================================ *)
 
 Inductive ductility_class : Type :=
   | DCL | DCM | DCH.
 
 (* ================================================================ *)
-(*  STRUCTURAL SYSTEM TYPES — EN 1998-1-1:2024, Table 5.1           *)
+(*  STRUCTURAL SYSTEM TYPES — EN 1998-1:2004, Table 5.1           *)
 (* ================================================================ *)
 
 Inductive structural_system : Type :=
@@ -373,7 +392,7 @@ Inductive structural_system : Type :=
   | TorsionallyFlexible.
 
 (* ================================================================ *)
-(*  BEHAVIOR FACTOR q0 — EN 1998-1-1:2024, Table 5.1                *)
+(*  BEHAVIOR FACTOR q0 — EN 1998-1:2004, Table 5.1                *)
 (* ================================================================ *)
 
 (* Basic behavior factor q0.  For system types where q0 depends on   *)
@@ -386,8 +405,8 @@ Definition q0 (dc : ductility_class) (ss : structural_system)
   | DCL, _                     => 3 / 2
   | DCM, FrameSystem           => 3 * au_a1
   | DCM, DualFrameEquiv        => 3 * au_a1
-  | DCM, DualWallEquiv         => 3
-  | DCM, DuctileWallSystem     => 3
+  | DCM, DualWallEquiv         => 3 * au_a1
+  | DCM, DuctileWallSystem     => 3 * au_a1
   | DCM, InvertedPendulum      => 3 / 2
   | DCM, TorsionallyFlexible   => 2
   | DCH, FrameSystem           => 9 / 2 * au_a1
@@ -413,7 +432,7 @@ Proof.
 Qed.
 
 (* ================================================================ *)
-(*  DESIGN SPECTRUM Sd(T) — EN 1998-1-1:2024, clause 3.2.2.5        *)
+(*  DESIGN SPECTRUM Sd(T) — EN 1998-1:2004, clause 3.2.2.5        *)
 (* ================================================================ *)
 
 (* Lower bound factor beta = 0.2 per clause 3.2.2.5(4)P.            *)
@@ -446,7 +465,7 @@ Proof.
 Qed.
 
 (* ================================================================ *)
-(*  LATERAL FORCE METHOD — EN 1998-1-1:2024, clause 4.3.3.2         *)
+(*  LATERAL FORCE METHOD — EN 1998-1:2004, clause 4.3.3.2         *)
 (* ================================================================ *)
 
 (* Applicability: T1 <= 4*TC and the building is regular in          *)
@@ -456,7 +475,7 @@ Definition lateral_force_applicable (T1 : R) (p : spectrum_params)
   T1 <= 4 * sp_TC p /\ elevation_regular.
 
 (* ================================================================ *)
-(*  BASE SHEAR — EN 1998-1-1:2024, clause 4.3.3.2.2                 *)
+(*  BASE SHEAR — EN 1998-1:2004, clause 4.3.3.2.2                 *)
 (* ================================================================ *)
 
 (* Correction factor lambda: 0.85 if T1 <= 2*TC and >= 3 storeys,   *)
@@ -575,7 +594,7 @@ Proof.
 Qed.
 
 (* ================================================================ *)
-(*  DISPLACEMENT AMPLIFICATION — EN 1998-1-1:2024, clause 4.3.4     *)
+(*  DISPLACEMENT AMPLIFICATION — EN 1998-1:2004, clause 4.3.4     *)
 (* ================================================================ *)
 
 (* Design displacement = q * elastic displacement.                   *)
@@ -584,7 +603,7 @@ Qed.
 Definition ds (q de : R) : R := q * de.
 
 (* ================================================================ *)
-(*  DRIFT LIMITS — EN 1998-1-1:2024, clause 4.4.3.2                 *)
+(*  DRIFT LIMITS — EN 1998-1:2004, clause 4.4.3.2                 *)
 (* ================================================================ *)
 
 (* Non-structural element attachment category.                       *)
@@ -602,7 +621,7 @@ Definition drift_limit (cat : ns_category) : R :=
   end.
 
 (* Reduction factor nu for lower return period per importance class.  *)
-(* EN 1998-1-1:2024, clause 4.4.3.2: recommended values.            *)
+(* EN 1998-1:2004, clause 4.4.3.2: recommended values.            *)
 Definition nu (ic : importance_class) : R :=
   match ic with
   | ClassI   => 2 / 5
@@ -649,7 +668,7 @@ Proof.
 Qed.
 
 (* ================================================================ *)
-(*  P-DELTA EFFECTS — EN 1998-1-1:2024, clause 4.4.2.2              *)
+(*  P-DELTA EFFECTS — EN 1998-1:2004, clause 4.4.2.2              *)
 (* ================================================================ *)
 
 (* Interstorey drift sensitivity coefficient.                        *)
@@ -731,7 +750,7 @@ Proof.
 Qed.
 
 (* ================================================================ *)
-(*  REGULARITY — EN 1998-1-1:2024, clause 4.2.3                     *)
+(*  REGULARITY — EN 1998-1:2004, clause 4.2.3                     *)
 (* ================================================================ *)
 
 (* Plan regularity: compactness, eccentricity <= 0.30*r, torsional   *)
@@ -1075,7 +1094,7 @@ Extract Inlined Constant Rmax => "(fun a b -> if a >= b then a else b)".
 Extract Inlined Constant Rgt_dec => "(fun a b -> if a > b then true else false)".
 Extract Inlined Constant Rlt_dec => "(fun a b -> if a < b then true else false)".
 Extract Inlined Constant Req_EM_T => "(fun a b -> if a = b then true else false)".
-Extract Constant ClassicalDedekindReals.sig_forall_dec => "fun _ -> None".
+Extract Inlined Constant ClassicalDedekindReals.sig_forall_dec => "(fun _ -> None)".
 
 Set Extraction Output Directory ".".
 
