@@ -102,7 +102,9 @@ Definition eta_valid (eta : R) : Prop := eta >= eta_min.
 (* Se(T) for given spectrum parameters, reference PGA ag, and       *)
 (* damping correction factor eta (eta = 1 for 5% damping).         *)
 
-(* Precondition: T >= 0.  Behavior for T < 0 is unspecified.         *)
+(* Se assumes T >= 0.  The compliance predicate enforces T1 > 0 via  *)
+(* well_formed_building, so negative periods cannot reach Se through  *)
+(* the verified pipeline.                                             *)
 Definition Se (p : spectrum_params) (ag eta T : R) : R :=
   if Rle_dec T (sp_TB p) then
     ag * sp_S p * (1 + T / sp_TB p * (eta * (5 / 2) - 1))
@@ -573,6 +575,15 @@ Proof.
 Qed.
 
 (* ================================================================ *)
+(*  DISPLACEMENT AMPLIFICATION — EN 1998-1-1:2024, clause 4.3.4     *)
+(* ================================================================ *)
+
+(* Design displacement = q * elastic displacement.                   *)
+(* The drift check requires dr to already include this factor, i.e.  *)
+(* dr = q * dr_elastic.                                              *)
+Definition ds (q de : R) : R := q * de.
+
+(* ================================================================ *)
 (*  DRIFT LIMITS — EN 1998-1-1:2024, clause 4.4.3.2                 *)
 (* ================================================================ *)
 
@@ -830,17 +841,23 @@ Record storey_data : Type := mk_storey_data {
 Definition sd_theta (sd : storey_data) : R :=
   theta (sd_Ptot sd) (sd_dr sd) (sd_Vtot sd) (sd_h sd).
 
-(* Storey data must match building: same count and positive values.  *)
-Fixpoint storey_data_consistent (storeys : list storey)
+(* Storey data must match building: same count, positive values,     *)
+(* and sd_h matches interstorey height (z_i - z_{i-1}).              *)
+Fixpoint storey_data_consistent_aux (prev_z : R) (storeys : list storey)
     (sds : list storey_data) : Prop :=
   match storeys, sds with
   | nil, nil => True
   | s :: sr, sd :: sdr =>
+      sd_h sd = st_z s - prev_z /\
       sd_h sd > 0 /\ sd_Vtot sd > 0 /\ sd_Ptot sd >= 0 /\
       sd_dr sd >= 0 /\
-      storey_data_consistent sr sdr
+      storey_data_consistent_aux (st_z s) sr sdr
   | _, _ => False   (* length mismatch *)
   end.
+
+Definition storey_data_consistent (storeys : list storey)
+    (sds : list storey_data) : Prop :=
+  storey_data_consistent_aux 0 storeys sds.
 
 Fixpoint all_drifts_ok (ic : importance_class) (cat : ns_category)
     (sds : list storey_data) : Prop :=
@@ -850,40 +867,57 @@ Fixpoint all_drifts_ok (ic : importance_class) (cat : ns_category)
       drift_ok ic cat (sd_dr sd) (sd_h sd) /\ all_drifts_ok ic cat rest
   end.
 
-Fixpoint all_pdelta_ok (sds : list storey_data) : Prop :=
+(* theta_max = 0.10 for negligible, 0.20 for simplified analysis,    *)
+(* 0.30 for detailed second-order.                                   *)
+Fixpoint all_pdelta_ok (theta_max : R) (sds : list storey_data) : Prop :=
   match sds with
   | nil => True
-  | sd :: rest => sd_theta sd <= 1/5 /\ all_pdelta_ok rest
+  | sd :: rest => sd_theta sd <= theta_max /\ all_pdelta_ok theta_max rest
   end.
 
 Definition ec8_compliant (b : building) (sp : seismic_params)
     (sds : list storey_data) : Prop :=
+  well_formed_building b /\
+  well_formed_spectrum (spar_sp sp) /\
   spar_q sp = q0 (bld_dc b) (bld_ss b) (bld_au_a1 b) /\
+  spar_eta sp >= eta_min /\
+  spar_agR sp > 0 /\
   storey_data_consistent (bld_storeys b) sds /\
   plan_regular (bld_e0x b) (bld_e0y b) (bld_rx b) (bld_ry b) (bld_ls b) /\
   elevation_regular (bld_masses b) (bld_stiffnesses b) /\
   bld_T1 b <= 4 * sp_TC (spar_sp sp) /\
   all_drifts_ok (spar_ic sp) (spar_ns_cat sp) sds /\
-  all_pdelta_ok sds.
+  all_pdelta_ok (1/5) sds.
 
 (* ================================================================ *)
 (*  DECIDABILITY — item 28                                           *)
 (* ================================================================ *)
 
+Lemma storey_data_consistent_aux_dec : forall prev_z storeys sds,
+  { storey_data_consistent_aux prev_z storeys sds } +
+  { ~ storey_data_consistent_aux prev_z storeys sds }.
+Proof.
+  intros prev_z storeys.
+  revert prev_z.
+  induction storeys as [|s sr IH]; destruct sds as [|sd sdr]; simpl; intros.
+  - left. exact I.
+  - right. tauto.
+  - right. tauto.
+  - destruct (Req_EM_T (sd_h sd) (st_z s - prev_z));
+    destruct (Rgt_dec (sd_h sd) 0);
+    destruct (Rgt_dec (sd_Vtot sd) 0);
+    destruct (Rge_dec (sd_Ptot sd) 0);
+    destruct (Rge_dec (sd_dr sd) 0);
+    destruct (IH (st_z s) sdr);
+    try (left; tauto); right; tauto.
+Defined.
+
 Lemma storey_data_consistent_dec : forall storeys sds,
   { storey_data_consistent storeys sds } +
   { ~ storey_data_consistent storeys sds }.
 Proof.
-  induction storeys as [|s sr IH]; destruct sds as [|sd sdr]; simpl.
-  - left. exact I.
-  - right. tauto.
-  - right. tauto.
-  - destruct (Rgt_dec (sd_h sd) 0);
-    destruct (Rgt_dec (sd_Vtot sd) 0);
-    destruct (Rge_dec (sd_Ptot sd) 0);
-    destruct (Rge_dec (sd_dr sd) 0);
-    destruct (IH sdr);
-    try (left; tauto); right; tauto.
+  intros. unfold storey_data_consistent.
+  apply storey_data_consistent_aux_dec.
 Defined.
 
 Lemma plan_regular_dec : forall e0x e0y rx ry ls,
@@ -906,12 +940,12 @@ Proof.
     destruct IH; try (left; tauto); right; tauto.
 Defined.
 
-Lemma all_pdelta_ok_dec : forall sds,
-  { all_pdelta_ok sds } + { ~ all_pdelta_ok sds }.
+Lemma all_pdelta_ok_dec : forall theta_max sds,
+  { all_pdelta_ok theta_max sds } + { ~ all_pdelta_ok theta_max sds }.
 Proof.
-  induction sds as [|sd rest IH]; simpl.
+  intros theta_max sds. induction sds as [|sd rest IH]; simpl.
   - left. exact I.
-  - destruct (Rle_dec (sd_theta sd) (1/5));
+  - destruct (Rle_dec (sd_theta sd) theta_max);
     destruct IH; try (left; tauto); right; tauto.
 Defined.
 
@@ -954,18 +988,62 @@ Proof.
   try (left; tauto); right; tauto.
 Defined.
 
+Lemma Forall_dec : forall {A : Type} (P : A -> Prop)
+    (P_dec : forall x, { P x } + { ~ P x }) (l : list A),
+  { Forall P l } + { ~ Forall P l }.
+Proof.
+  intros A P P_dec l. induction l as [|x rest IH]; simpl.
+  - left. constructor.
+  - destruct (P_dec x); destruct IH.
+    + left. constructor; assumption.
+    + right. intro H. inversion H. contradiction.
+    + right. intro H. inversion H. contradiction.
+    + right. intro H. inversion H. contradiction.
+Defined.
+
+Lemma well_formed_spectrum_dec : forall p,
+  { well_formed_spectrum p } + { ~ well_formed_spectrum p }.
+Proof.
+  intros. unfold well_formed_spectrum.
+  destruct (Rgt_dec (sp_S p) 0);
+  destruct (Rgt_dec (sp_TB p) 0);
+  destruct (Rlt_dec (sp_TB p) (sp_TC p));
+  destruct (Rlt_dec (sp_TC p) (sp_TD p));
+  try (left; tauto); right; tauto.
+Defined.
+
+Lemma well_formed_building_dec : forall b,
+  { well_formed_building b } + { ~ well_formed_building b }.
+Proof.
+  intros. unfold well_formed_building.
+  destruct (Nat.eq_dec (length (bld_stiffnesses b)) (length (bld_storeys b)));
+  destruct (Forall_dec (fun s => st_z s > 0) (fun s => Rgt_dec (st_z s) 0)
+              (bld_storeys b));
+  destruct (Forall_dec (fun s => st_m s > 0) (fun s => Rgt_dec (st_m s) 0)
+              (bld_storeys b));
+  destruct (Forall_dec (fun k => k > 0) (fun k => Rgt_dec k 0)
+              (bld_stiffnesses b));
+  destruct (Rgt_dec (bld_T1 b) 0);
+  destruct (Rge_dec (bld_au_a1 b) 1);
+  try (left; tauto); right; tauto.
+Defined.
+
 Theorem ec8_compliant_dec : forall b sp sds,
   { ec8_compliant b sp sds } + { ~ ec8_compliant b sp sds }.
 Proof.
   intros. unfold ec8_compliant.
+  destruct (well_formed_building_dec b);
+  destruct (well_formed_spectrum_dec (spar_sp sp));
   destruct (Req_EM_T (spar_q sp) (q0 (bld_dc b) (bld_ss b) (bld_au_a1 b)));
+  destruct (Rge_dec (spar_eta sp) eta_min);
+  destruct (Rgt_dec (spar_agR sp) 0);
   destruct (storey_data_consistent_dec (bld_storeys b) sds);
   destruct (plan_regular_dec (bld_e0x b) (bld_e0y b)
               (bld_rx b) (bld_ry b) (bld_ls b));
   destruct (elevation_regular_dec (bld_masses b) (bld_stiffnesses b));
   destruct (Rle_dec (bld_T1 b) (4 * sp_TC (spar_sp sp)));
   destruct (all_drifts_ok_dec (spar_ic sp) (spar_ns_cat sp) sds);
-  destruct (all_pdelta_ok_dec sds);
+  destruct (all_pdelta_ok_dec (1/5) sds);
   try (left; tauto); right; tauto.
 Defined.
 
@@ -976,6 +1054,11 @@ Defined.
 Require Import ExtrOcamlBasic ExtrOcamlNatInt.
 
 (* Map Coq reals to OCaml floats for executable extraction.          *)
+(* WARNING: All proofs hold over mathematical reals (R), not IEEE    *)
+(* 754 floats.  Rounding, NaN, ±infinity, and denormals can violate  *)
+(* any proved property at the executable level.  For sound execution, *)
+(* use interval arithmetic or verify floating-point error bounds     *)
+(* separately (e.g. via Flocq).                                      *)
 Extract Inlined Constant R => "float".
 Extract Inlined Constant R0 => "0.0".
 Extract Inlined Constant R1 => "1.0".
@@ -989,6 +1072,10 @@ Extract Inlined Constant Rge_dec => "(fun a b -> if a >= b then true else false)
 Extract Inlined Constant Ropp => "(fun x -> ~-. x)".
 Extract Inlined Constant Rabs => "(fun x -> Float.abs x)".
 Extract Inlined Constant Rmax => "(fun a b -> if a >= b then a else b)".
+Extract Inlined Constant Rgt_dec => "(fun a b -> if a > b then true else false)".
+Extract Inlined Constant Rlt_dec => "(fun a b -> if a < b then true else false)".
+Extract Inlined Constant Req_EM_T => "(fun a b -> if a = b then true else false)".
+Extract Constant ClassicalDedekindReals.sig_forall_dec => "fun _ -> None".
 
 Set Extraction Output Directory ".".
 

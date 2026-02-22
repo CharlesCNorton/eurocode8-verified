@@ -2,9 +2,11 @@
 type __ = Obj.t
 let __ = let rec f _ = Obj.repr f in Obj.repr f
 
-type ('a, 'b) sum =
-| Inl of 'a
-| Inr of 'b
+(** val length : 'a1 list -> int **)
+
+let rec length = function
+| [] -> 0
+| _ :: l' -> Stdlib.Int.succ (length l')
 
 type comparison =
 | Eq
@@ -597,44 +599,11 @@ let qbound_lt_ZExp2 q1 =
       (pos_log2floor_plus1 q1.qden)
   | Zneg _ -> Z0
 
-(** val z_inj_nat_rev : int -> z **)
-
-let z_inj_nat_rev n =
-  (fun fO fS n -> if n=0 then fO () else fS (n-1))
-    (fun _ -> Z0)
-    (fun _ ->
-    match Coq_Pos.of_nat n with
-    | XI p -> Zneg (Coq_Pos.succ p)
-    | XO p -> Zpos p
-    | XH -> Zneg XH)
-    n
-
 type cReal = { seq : (z -> q); scale : z }
-
-type cRealLt = z
-
-(** val cRealLt_lpo_dec :
-    cReal -> cReal -> (__ -> (int -> bool) -> int option) -> (cRealLt, __) sum **)
-
-let cRealLt_lpo_dec x y lpo =
-  let s =
-    lpo __ (fun n ->
-      let s =
-        qlt_le_dec
-          (qmult { qnum = (Zpos (XO XH)); qden = XH }
-            (qpower { qnum = (Zpos (XO XH)); qden = XH } (z_inj_nat_rev n)))
-          (qminus (y.seq (z_inj_nat_rev n)) (x.seq (z_inj_nat_rev n)))
-      in
-      if s then false else true)
-  in
-  (match s with
-   | Some s0 -> Inl (z_inj_nat_rev s0)
-   | None -> Inr __)
 
 (** val sig_forall_dec : (int -> bool) -> int option **)
 
-let sig_forall_dec =
-  failwith "AXIOM TO BE REALIZED"
+let sig_forall_dec = fun _ -> None
 
 (** val lowerCutBelow : (q -> bool) -> q **)
 
@@ -819,24 +788,6 @@ let iZR = function
 | Zpos n -> iPR n
 | Zneg n -> (fun x -> ~-. x) (iPR n)
 
-(** val total_order_T : float -> float -> bool option **)
-
-let total_order_T r1 r2 =
-  let s =
-    cRealLt_lpo_dec (RbaseSymbolsImpl.coq_Rrepr r1)
-      (RbaseSymbolsImpl.coq_Rrepr r2) (fun _ -> sig_forall_dec)
-  in
-  (match s with
-   | Inl _ -> Some true
-   | Inr _ ->
-     let s0 =
-       cRealLt_lpo_dec (RbaseSymbolsImpl.coq_Rrepr r2)
-         (RbaseSymbolsImpl.coq_Rrepr r1) (fun _ -> sig_forall_dec)
-     in
-     (match s0 with
-      | Inl _ -> None
-      | Inr _ -> Some false))
-
 module type RinvSig =
  sig
   val coq_Rinv : float -> float
@@ -849,28 +800,6 @@ module RinvImpl =
   let coq_Rinv_def =
     __
  end
-
-
-
-(** val req_dec_T : float -> float -> bool **)
-
-let req_dec_T r1 r2 =
-  let s = total_order_T r1 r2 in
-  (match s with
-   | Some s0 -> if s0 then false else true
-   | None -> false)
-
-(** val rlt_dec : float -> float -> bool **)
-
-let rlt_dec r1 r2 =
-  let s = total_order_T r1 r2 in (match s with
-                                  | Some s0 -> s0
-                                  | None -> false)
-
-(** val rgt_dec : float -> float -> bool **)
-
-let rgt_dec r1 r2 =
-  rlt_dec r2 r1
 
 
 
@@ -999,6 +928,12 @@ let spectrum_lookup st gt =
          sp_TD =
          ((fun a b -> a /. b) (iZR (Zpos (XO (XI XH))))
            (iZR (Zpos (XI (XO XH))))) })
+
+(** val eta_min : float **)
+
+let eta_min =
+  (fun a b -> a /. b) (iZR (Zpos (XI (XI (XI (XO (XI XH)))))))
+    (iZR (Zpos (XO (XO (XI (XO (XO (XI XH))))))))
 
 (** val se : spectrum_params -> float -> float -> float -> float **)
 
@@ -1200,35 +1135,54 @@ type storey_data = { sd_dr : float; sd_h : float; sd_Ptot : float;
 let sd_theta sd0 =
   theta sd0.sd_Ptot sd0.sd_dr sd0.sd_Vtot sd0.sd_h
 
-(** val storey_data_consistent_dec :
-    storey list -> storey_data list -> bool **)
+(** val storey_data_consistent_aux_dec :
+    float -> storey list -> storey_data list -> bool **)
 
-let rec storey_data_consistent_dec l sds =
-  match l with
+let rec storey_data_consistent_aux_dec prev_z storeys sds =
+  match storeys with
   | [] -> (match sds with
            | [] -> true
            | _ :: _ -> false)
-  | _ :: l0 ->
+  | y :: l ->
     (match sds with
      | [] -> false
-     | s :: l1 ->
-       let s0 = rgt_dec s.sd_h (iZR Z0) in
+     | s :: l0 ->
+       let s0 =
+         (fun a b -> if a = b then true else false) s.sd_h
+           (( -. ) y.st_z prev_z)
+       in
        if s0
-       then let s1 = rgt_dec s.sd_Vtot (iZR Z0) in
+       then let s1 =
+              (fun a b -> if a > b then true else false) s.sd_h (iZR Z0)
+            in
             if s1
             then let s2 =
-                   (fun a b -> if a >= b then true else false) s.sd_Ptot
+                   (fun a b -> if a > b then true else false) s.sd_Vtot
                      (iZR Z0)
                  in
                  if s2
                  then let s3 =
-                        (fun a b -> if a >= b then true else false) s.sd_dr
+                        (fun a b -> if a >= b then true else false) s.sd_Ptot
                           (iZR Z0)
                       in
-                      if s3 then storey_data_consistent_dec l0 l1 else false
+                      if s3
+                      then let s4 =
+                             (fun a b -> if a >= b then true else false)
+                               s.sd_dr (iZR Z0)
+                           in
+                           if s4
+                           then storey_data_consistent_aux_dec y.st_z l l0
+                           else false
+                      else false
                  else false
             else false
        else false)
+
+(** val storey_data_consistent_dec :
+    storey list -> storey_data list -> bool **)
+
+let storey_data_consistent_dec storeys sds =
+  storey_data_consistent_aux_dec (iZR Z0) storeys sds
 
 (** val plan_regular_dec :
     float -> float -> float -> float -> float -> bool **)
@@ -1265,16 +1219,14 @@ let rec all_drifts_ok_dec ic cat = function
   let s = drift_ok_dec ic cat y.sd_dr y.sd_h in
   if s then all_drifts_ok_dec ic cat l else false
 
-(** val all_pdelta_ok_dec : storey_data list -> bool **)
+(** val all_pdelta_ok_dec : float -> storey_data list -> bool **)
 
-let rec all_pdelta_ok_dec = function
+let rec all_pdelta_ok_dec theta_max = function
 | [] -> true
-| y :: l0 ->
-  let s =
-    (fun a b -> if a <= b then true else false) (sd_theta y)
-      ((fun a b -> a /. b) (iZR (Zpos XH)) (iZR (Zpos (XI (XO XH)))))
+| y :: l ->
+  let s = (fun a b -> if a <= b then true else false) (sd_theta y) theta_max
   in
-  if s then all_pdelta_ok_dec l0 else false
+  if s then all_pdelta_ok_dec theta_max l else false
 
 (** val mass_ratio_ok_dec : float -> float -> bool **)
 
@@ -1314,31 +1266,124 @@ let elevation_regular_dec masses stiffnesses =
   let s = all_adjacent_dec mass_ratio_ok_dec masses in
   if s then all_adjacent_dec stiffness_continuity_dec stiffnesses else false
 
+(** val forall_dec : ('a1 -> bool) -> 'a1 list -> bool **)
+
+let rec forall_dec p_dec = function
+| [] -> true
+| y :: l0 -> let s = p_dec y in if s then forall_dec p_dec l0 else false
+
+(** val well_formed_spectrum_dec : spectrum_params -> bool **)
+
+let well_formed_spectrum_dec p =
+  let s = (fun a b -> if a > b then true else false) p.sp_S (iZR Z0) in
+  if s
+  then let s0 = (fun a b -> if a > b then true else false) p.sp_TB (iZR Z0) in
+       if s0
+       then let s1 =
+              (fun a b -> if a < b then true else false) p.sp_TB p.sp_TC
+            in
+            if s1
+            then (fun a b -> if a < b then true else false) p.sp_TC p.sp_TD
+            else false
+       else false
+  else false
+
+(** val well_formed_building_dec : building -> bool **)
+
+let well_formed_building_dec b =
+  let s = (=) (length b.bld_stiffnesses) (length b.bld_storeys) in
+  if s
+  then let s0 =
+         forall_dec (fun s0 ->
+           (fun a b -> if a > b then true else false) s0.st_z (iZR Z0))
+           b.bld_storeys
+       in
+       if s0
+       then let s1 =
+              forall_dec (fun s1 ->
+                (fun a b -> if a > b then true else false) s1.st_m (iZR Z0))
+                b.bld_storeys
+            in
+            if s1
+            then let s2 =
+                   forall_dec (fun k ->
+                     (fun a b -> if a > b then true else false) k (iZR Z0))
+                     b.bld_stiffnesses
+                 in
+                 if s2
+                 then let s3 =
+                        (fun a b -> if a > b then true else false) b.bld_T1
+                          (iZR Z0)
+                      in
+                      if s3
+                      then (fun a b -> if a >= b then true else false)
+                             b.bld_au_a1 (iZR (Zpos XH))
+                      else false
+                 else false
+            else false
+       else false
+  else false
+
 (** val ec8_compliant_dec :
     building -> seismic_params -> storey_data list -> bool **)
 
 let ec8_compliant_dec b sp sds =
-  let s = req_dec_T sp.spar_q (q0 b.bld_dc b.bld_ss b.bld_au_a1) in
+  let s = well_formed_building_dec b in
   if s
-  then let s0 = storey_data_consistent_dec b.bld_storeys sds in
+  then let s0 = well_formed_spectrum_dec sp.spar_sp in
        if s0
        then let s1 =
-              plan_regular_dec b.bld_e0x b.bld_e0y b.bld_rx b.bld_ry b.bld_ls
+              (fun a b -> if a = b then true else false) sp.spar_q
+                (q0 b.bld_dc b.bld_ss b.bld_au_a1)
             in
             if s1
             then let s2 =
-                   elevation_regular_dec (bld_masses b) b.bld_stiffnesses
+                   (fun a b -> if a >= b then true else false) sp.spar_eta
+                     eta_min
                  in
                  if s2
                  then let s3 =
-                        (fun a b -> if a <= b then true else false) b.bld_T1
-                          (( *. ) (iZR (Zpos (XO (XO XH)))) sp.spar_sp.sp_TC)
+                        (fun a b -> if a > b then true else false)
+                          sp.spar_agR (iZR Z0)
                       in
                       if s3
                       then let s4 =
-                             all_drifts_ok_dec sp.spar_ic sp.spar_ns_cat sds
+                             storey_data_consistent_dec b.bld_storeys sds
                            in
-                           if s4 then all_pdelta_ok_dec sds else false
+                           if s4
+                           then let s5 =
+                                  plan_regular_dec b.bld_e0x b.bld_e0y
+                                    b.bld_rx b.bld_ry b.bld_ls
+                                in
+                                if s5
+                                then let s6 =
+                                       elevation_regular_dec (bld_masses b)
+                                         b.bld_stiffnesses
+                                     in
+                                     if s6
+                                     then let s7 =
+                                            (fun a b -> if a <= b then true else false)
+                                              b.bld_T1
+                                              (( *. )
+                                                (iZR (Zpos (XO (XO XH))))
+                                                sp.spar_sp.sp_TC)
+                                          in
+                                          if s7
+                                          then let s8 =
+                                                 all_drifts_ok_dec sp.spar_ic
+                                                   sp.spar_ns_cat sds
+                                               in
+                                               if s8
+                                               then all_pdelta_ok_dec
+                                                      ((fun a b -> a /. b)
+                                                        (iZR (Zpos XH))
+                                                        (iZR (Zpos (XI (XO
+                                                          XH))))) sds
+                                               else false
+                                          else false
+                                     else false
+                                else false
+                           else false
                       else false
                  else false
             else false

@@ -1,10 +1,5 @@
 open Eurocode8
 
-(* Realize the classical axiom — bounded search up to 1000. *)
-let () =
-  (* sig_forall_dec is referenced but unused in our float-extracted code *)
-  ()
-
 let () =
   (* Type 1 spectrum, Ground type A: S=1.0, TB=0.15, TC=0.4, TD=2.0 *)
   let sp = spectrum_lookup Type1 GroundA in
@@ -32,23 +27,24 @@ let () =
     se_3 (ag *. sp.sp_S *. eta *. 2.5 *. sp.sp_TC *. sp.sp_TD /. (3.0 *. 3.0));
 
   (* Design spectrum *)
-  let q_val = 3.0 in
-  Printf.printf "\n--- Design Spectrum Sd(T), q=%.1f ---\n" q_val;
+  let q_val = q0 DCM FrameSystem 1.2 in
+  Printf.printf "\n--- Design Spectrum Sd(T), q=%.2f ---\n" q_val;
   Printf.printf "Sd(0.5)  = %.4f\n" (sd sp ag eta q_val 0.5);
   Printf.printf "beta*ag  = %.4f  (floor)\n" (beta *. ag);
 
   (* Building model *)
   Printf.printf "\n--- 3-Storey Building Model ---\n";
-  let building = {
+  let bld = {
     bld_storeys = [
       { st_z = 3.0; st_m = 100.0 };
       { st_z = 6.0; st_m = 100.0 };
       { st_z = 9.0; st_m = 80.0 }
     ];
-    bld_masses = [100.0; 100.0; 80.0];
     bld_stiffnesses = [1000.0; 900.0; 800.0];
     bld_T1 = 0.5;
-    bld_n_storeys = 3;
+    bld_dc = DCM;
+    bld_ss = FrameSystem;
+    bld_au_a1 = 1.2;
     bld_e0x = 0.1;
     bld_e0y = 0.1;
     bld_rx = 2.0;
@@ -57,22 +53,23 @@ let () =
   } in
 
   let seismic = {
+    spar_ic = ClassII;
     spar_sp = sp;
-    spar_ag = ag;
+    spar_agR = ag;
     spar_eta = eta;
     spar_q = q_val;
     spar_ns_cat = NS_Ductile;
   } in
 
   (* Storey forces *)
-  let sd_T1 = sd sp ag eta q_val building.bld_T1 in
+  let sd_T1 = sd sp ag eta q_val bld.bld_T1 in
   let m_total = 280.0 in
-  let lam = lambda building.bld_T1 sp 3 in
+  let lam = lambda bld.bld_T1 sp 3 in
   let base_shear = fb sd_T1 m_total lam in
-  Printf.printf "Sd(T1=%.2f)  = %.4f\n" building.bld_T1 sd_T1;
+  Printf.printf "Sd(T1=%.2f)  = %.4f\n" bld.bld_T1 sd_T1;
   Printf.printf "lambda       = %.4f\n" lam;
   Printf.printf "Fb           = %.4f\n" base_shear;
-  let forces = storey_forces base_shear building.bld_storeys in
+  let forces = storey_forces base_shear bld.bld_storeys in
   List.iteri (fun i f ->
     Printf.printf "  F%d = %.4f\n" (i+1) f
   ) forces;
@@ -93,24 +90,31 @@ let () =
   show_pd 0.25;
   show_pd 0.35;
 
-  (* Compliance check *)
+  (* Compliance check — storey_data uses sd_Ptot/sd_Vtot now *)
   Printf.printf "\n--- Compliance Check ---\n";
+  (* sd_h must equal interstorey height: z1-0=3, z2-z1=3, z3-z2=3 *)
   let storey_checks = [
-    { sd_dr = 0.005; sd_h = 3.0; sd_theta = 0.08 };
-    { sd_dr = 0.004; sd_h = 3.0; sd_theta = 0.06 };
-    { sd_dr = 0.003; sd_h = 3.0; sd_theta = 0.04 };
+    { sd_dr = 0.005; sd_h = 3.0; sd_Ptot = 800.0; sd_Vtot = 150.0 };
+    { sd_dr = 0.004; sd_h = 3.0; sd_Ptot = 500.0; sd_Vtot = 120.0 };
+    { sd_dr = 0.003; sd_h = 3.0; sd_Ptot = 200.0; sd_Vtot = 80.0 };
   ] in
-  let result = ec8_compliant_dec building seismic storey_checks in
+  List.iteri (fun i sd0 ->
+    Printf.printf "  storey %d: theta = %.4f\n" (i+1) (sd_theta sd0)
+  ) storey_checks;
+  let result = ec8_compliant_dec bld seismic storey_checks in
   Printf.printf "Result: %s\n" (if result then "COMPLIANT" else "NON-COMPLIANT");
 
   (* Failing case: excessive theta *)
   Printf.printf "\n--- Failing Case (excessive P-Delta) ---\n";
   let bad_checks = [
-    { sd_dr = 0.005; sd_h = 3.0; sd_theta = 0.35 };
-    { sd_dr = 0.004; sd_h = 3.0; sd_theta = 0.06 };
-    { sd_dr = 0.003; sd_h = 3.0; sd_theta = 0.04 };
+    { sd_dr = 0.020; sd_h = 3.0; sd_Ptot = 8000.0; sd_Vtot = 150.0 };
+    { sd_dr = 0.004; sd_h = 3.0; sd_Ptot = 500.0;  sd_Vtot = 120.0 };
+    { sd_dr = 0.003; sd_h = 3.0; sd_Ptot = 200.0;  sd_Vtot = 80.0 };
   ] in
-  let result2 = ec8_compliant_dec building seismic bad_checks in
+  List.iteri (fun i sd0 ->
+    Printf.printf "  storey %d: theta = %.4f\n" (i+1) (sd_theta sd0)
+  ) bad_checks;
+  let result2 = ec8_compliant_dec bld seismic bad_checks in
   Printf.printf "Result: %s\n" (if result2 then "COMPLIANT" else "NON-COMPLIANT");
 
   Printf.printf "\n=== Validation complete ===\n"
