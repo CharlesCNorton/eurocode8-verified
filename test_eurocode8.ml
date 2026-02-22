@@ -126,6 +126,7 @@ let () =
     spar_eta = eta;
     spar_q = q_val;
     spar_ns_cat = NS_Ductile;
+    spar_pda = PDA_Simplified;
   } in
 
   (* Base shear and storey forces *)

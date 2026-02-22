@@ -373,6 +373,185 @@ Proof.
 Qed.
 
 (* ================================================================ *)
+(*  CONTINUITY OF Se ON (0, +inf)                                   *)
+(* ================================================================ *)
+
+(* Se without the T >= 0 guard.  Equals Se for T > 0.               *)
+Definition Se_inner (p : spectrum_params) (ag eta T : R) : R :=
+  if Rle_dec T (sp_TB p) then
+    ag * sp_S p * (1 + T / sp_TB p * (eta * (5 / 2) - 1))
+  else if Rle_dec T (sp_TC p) then
+    ag * sp_S p * eta * (5 / 2)
+  else if Rle_dec T (sp_TD p) then
+    ag * sp_S p * eta * (5 / 2) * (sp_TC p / T)
+  else
+    ag * sp_S p * eta * (5 / 2) * (sp_TC p * sp_TD p / (T * T)).
+
+Lemma Se_eq_inner : forall p ag eta T,
+  T > 0 -> Se p ag eta T = Se_inner p ag eta T.
+Proof.
+  intros. unfold Se, Se_inner.
+  destruct (Rle_dec 0 T); [reflexivity | lra].
+Qed.
+
+(* Piecewise function is continuous at a join point if both branches *)
+(* are continuous there and agree on the value.                      *)
+Lemma piecewise_cont_at :
+  forall (f g : R -> R) (c : R),
+  continuity_pt f c -> continuity_pt g c -> f c = g c ->
+  continuity_pt (fun x => if Rle_dec x c then f x else g x) c.
+Proof.
+  intros f g c Hf Hg Hfg.
+  unfold continuity_pt, continue_in, limit1_in, limit_in in *.
+  unfold D_x, no_cond in *. simpl in *.
+  intros eps Heps.
+  destruct (Hf eps Heps) as [d1 [Hd1 Hf']]; clear Hf.
+  destruct (Hg eps Heps) as [d2 [Hd2 Hg']]; clear Hg.
+  exists (Rmin d1 d2). split; [apply Rmin_pos; assumption |].
+  intros x [[_ Hneq] Hdist].
+  destruct (Rle_dec c c) as [_ | Hn]; [| exfalso; lra].
+  destruct (Rle_dec x c).
+  - apply Hf'. split; [split; [exact I | exact Hneq] |].
+    eapply Rlt_le_trans; [exact Hdist | apply Rmin_l].
+  - rewrite Hfg. apply Hg'. split; [split; [exact I | exact Hneq] |].
+    eapply Rlt_le_trans; [exact Hdist | apply Rmin_r].
+Qed.
+
+(* Se is continuous at every T > 0.  Proof by composing branch       *)
+(* continuity with branch agreement at corner periods TB, TC, TD.    *)
+Theorem Se_continuous_pos : forall p ag eta T,
+  well_formed_spectrum p -> T > 0 ->
+  continuity_pt (Se p ag eta) T.
+Proof.
+  intros p ag eta T [HS [HTB [HTBC HTCD]]] HT.
+  (* Step 1: Se = Se_inner near T since T > 0 *)
+  apply continuity_pt_locally_ext with (f := Se_inner p ag eta) (a := T / 2).
+  { lra. }
+  { intros y Hy. symmetry. apply Se_eq_inner.
+    unfold R_dist in Hy. assert (Hbd := Rabs_def2 _ _ Hy). lra. }
+  (* Step 2: Se_inner continuity at T by case analysis *)
+  unfold Se_inner.
+  (* --- Breakpoint T = TB --- *)
+  destruct (Req_EM_T T (sp_TB p)) as [-> | HT_neq_TB].
+  { apply piecewise_cont_at.
+    - reg; lra.
+    - apply continuity_pt_locally_ext with
+        (f := fun _ : R => ag * sp_S p * eta * (5 / 2))
+        (a := sp_TC p - sp_TB p).
+      { lra. }
+      { intros y Hy. unfold R_dist in Hy.
+        assert (Hbd := Rabs_def2 _ _ Hy).
+        destruct (Rle_dec y (sp_TC p)); [reflexivity | exfalso; lra]. }
+      apply continuity_pt_const. unfold constant. reflexivity.
+    - destruct (Rle_dec (sp_TB p) (sp_TC p)); [| lra]. field. lra. }
+  (* --- T not at TB --- *)
+  destruct (Rle_dec T (sp_TB p)) as [HT_le_TB | HT_gt_TB].
+  { (* 0 < T < TB: interior of branch 1 *)
+    apply continuity_pt_locally_ext with
+      (f := fun T0 => ag * sp_S p *
+        (1 + T0 / sp_TB p * (eta * (5 / 2) - 1)))
+      (a := Rmin (T / 2) (sp_TB p - T)).
+    { apply Rmin_pos; lra. }
+    { intros y Hy. unfold R_dist in Hy.
+      assert (Hbd := Rabs_def2 _ _ Hy).
+      assert (Hy_ub : y < sp_TB p).
+      { apply Rlt_le_trans with (T + (sp_TB p - T)).
+        - apply Rlt_le_trans with (T + Rmin (T / 2) (sp_TB p - T));
+            [lra | apply Rplus_le_compat_l; apply Rmin_r].
+        - lra. }
+      destruct (Rle_dec y (sp_TB p)); [reflexivity | lra]. }
+    reg; lra. }
+  (* --- T > TB: peel off outer branch --- *)
+  apply continuity_pt_locally_ext with
+    (f := fun T0 =>
+      if Rle_dec T0 (sp_TC p) then
+        ag * sp_S p * eta * (5 / 2)
+      else if Rle_dec T0 (sp_TD p) then
+        ag * sp_S p * eta * (5 / 2) * (sp_TC p / T0)
+      else
+        ag * sp_S p * eta * (5 / 2) * (sp_TC p * sp_TD p / (T0 * T0)))
+    (a := (T - sp_TB p) / 2).
+  { lra. }
+  { intros y Hy. unfold R_dist in Hy.
+    assert (Hbd := Rabs_def2 _ _ Hy).
+    destruct (Rle_dec y (sp_TB p)); [exfalso; lra | reflexivity]. }
+  (* --- Breakpoint T = TC --- *)
+  destruct (Req_EM_T T (sp_TC p)) as [-> | HT_neq_TC].
+  { apply piecewise_cont_at.
+    - apply continuity_pt_const. unfold constant. reflexivity.
+    - apply continuity_pt_locally_ext with
+        (f := fun T0 => ag * sp_S p * eta * (5 / 2) * (sp_TC p / T0))
+        (a := sp_TD p - sp_TC p).
+      { lra. }
+      { intros y Hy. unfold R_dist in Hy.
+        assert (Hbd := Rabs_def2 _ _ Hy).
+        destruct (Rle_dec y (sp_TD p)); [reflexivity | exfalso; lra]. }
+      reg; lra.
+    - destruct (Rle_dec (sp_TC p) (sp_TD p)); [| lra]. field. lra. }
+  (* --- T not at TC --- *)
+  destruct (Rle_dec T (sp_TC p)) as [HT_le_TC | HT_gt_TC].
+  { (* TB < T < TC: constant branch *)
+    apply continuity_pt_locally_ext with
+      (f := fun _ : R => ag * sp_S p * eta * (5 / 2))
+      (a := Rmin (T - sp_TB p) (sp_TC p - T)).
+    { apply Rmin_pos; lra. }
+    { intros y Hy. unfold R_dist in Hy.
+      assert (Hbd := Rabs_def2 _ _ Hy).
+      assert (Hy_ub : y < sp_TC p).
+      { apply Rlt_le_trans with (T + (sp_TC p - T)).
+        - apply Rlt_le_trans with (T + Rmin (T - sp_TB p) (sp_TC p - T));
+            [lra | apply Rplus_le_compat_l; apply Rmin_r].
+        - lra. }
+      destruct (Rle_dec y (sp_TC p)); [reflexivity | lra]. }
+    apply continuity_pt_const. unfold constant. reflexivity. }
+  (* --- T > TC: peel off TC branch --- *)
+  apply continuity_pt_locally_ext with
+    (f := fun T0 =>
+      if Rle_dec T0 (sp_TD p) then
+        ag * sp_S p * eta * (5 / 2) * (sp_TC p / T0)
+      else
+        ag * sp_S p * eta * (5 / 2) * (sp_TC p * sp_TD p / (T0 * T0)))
+    (a := (T - sp_TC p) / 2).
+  { lra. }
+  { intros y Hy. unfold R_dist in Hy.
+    assert (Hbd := Rabs_def2 _ _ Hy).
+    destruct (Rle_dec y (sp_TC p)); [exfalso; lra | reflexivity]. }
+  (* --- Breakpoint T = TD --- *)
+  destruct (Req_EM_T T (sp_TD p)) as [-> | HT_neq_TD].
+  { apply piecewise_cont_at.
+    - reg; lra.
+    - reg. intro H. assert (sp_TD p > 0) by lra.
+      apply Rmult_integral in H. lra.
+    - field. lra. }
+  (* --- T not at TD --- *)
+  destruct (Rle_dec T (sp_TD p)) as [HT_le_TD | HT_gt_TD].
+  { (* TC < T < TD: branch 3 *)
+    apply continuity_pt_locally_ext with
+      (f := fun T0 => ag * sp_S p * eta * (5 / 2) * (sp_TC p / T0))
+      (a := Rmin (T - sp_TC p) (sp_TD p - T)).
+    { apply Rmin_pos; lra. }
+    { intros y Hy. unfold R_dist in Hy.
+      assert (Hbd := Rabs_def2 _ _ Hy).
+      assert (Hy_ub : y < sp_TD p).
+      { apply Rlt_le_trans with (T + (sp_TD p - T)).
+        - apply Rlt_le_trans with (T + Rmin (T - sp_TC p) (sp_TD p - T));
+            [lra | apply Rplus_le_compat_l; apply Rmin_r].
+        - lra. }
+      destruct (Rle_dec y (sp_TD p)); [reflexivity | lra]. }
+    reg; lra. }
+  { (* T > TD: branch 4 *)
+    apply continuity_pt_locally_ext with
+      (f := fun T0 => ag * sp_S p * eta * (5 / 2) *
+        (sp_TC p * sp_TD p / (T0 * T0)))
+      (a := (T - sp_TD p) / 2).
+    { lra. }
+    { intros y Hy. unfold R_dist in Hy.
+      assert (Hbd := Rabs_def2 _ _ Hy).
+      destruct (Rle_dec y (sp_TD p)); [exfalso; lra | reflexivity]. }
+    reg. intro H. apply Rmult_integral in H. lra. }
+Qed.
+
+(* ================================================================ *)
 (*  DUCTILITY CLASSES — EN 1998-1:2004, clause 5.2.1              *)
 (* ================================================================ *)
 
@@ -736,6 +915,19 @@ Proof.
   lra.
 Qed.
 
+(* Analysis type for P-delta: determines the permissible theta_max.  *)
+(* PDA_Simplified: approximate 1/(1-theta) amplification, theta <= 0.20. *)
+(* PDA_Explicit: explicit second-order analysis, theta <= 0.30.      *)
+Inductive pdelta_analysis : Type :=
+  | PDA_Simplified
+  | PDA_Explicit.
+
+Definition pdelta_theta_max (pa : pdelta_analysis) : R :=
+  match pa with
+  | PDA_Simplified => 1/5
+  | PDA_Explicit   => 3/10
+  end.
+
 (* 1/(1-theta) is strictly increasing on (-inf, 1).                  *)
 Lemma pdelta_amp_increasing : forall th1 th2,
   th1 < th2 -> th2 < 1 ->
@@ -826,10 +1018,21 @@ Definition bld_masses (b : building) : list R :=
 Definition bld_n_storeys (b : building) : nat :=
   length (bld_storeys b).
 
+(* Storey heights must be strictly increasing from base (cumulative). *)
+(* st_z is height above base, not individual storey height.           *)
+Fixpoint strictly_increasing_aux (prev : R) (l : list storey) : Prop :=
+  match l with
+  | nil => True
+  | s :: rest => st_z s > prev /\ strictly_increasing_aux (st_z s) rest
+  end.
+
+Definition strictly_increasing (l : list storey) : Prop :=
+  strictly_increasing_aux 0 l.
+
 (* Building well-formedness: values sensible, stiffness list matches. *)
 Definition well_formed_building (b : building) : Prop :=
   length (bld_stiffnesses b) = length (bld_storeys b) /\
-  Forall (fun s => st_z s > 0) (bld_storeys b) /\
+  strictly_increasing (bld_storeys b) /\
   Forall (fun s => st_m s > 0) (bld_storeys b) /\
   Forall (fun k => k > 0) (bld_stiffnesses b) /\
   bld_T1 b > 0 /\
@@ -842,6 +1045,7 @@ Record seismic_params : Type := mk_seismic_params {
   spar_eta    : R;
   spar_q      : R;
   spar_ns_cat : ns_category;
+  spar_pda    : pdelta_analysis;
 }.
 
 (* Design ground acceleration: ag = γI * agR.                        *)
@@ -906,7 +1110,7 @@ Definition ec8_compliant (b : building) (sp : seismic_params)
   elevation_regular (bld_masses b) (bld_stiffnesses b) /\
   bld_T1 b <= 4 * sp_TC (spar_sp sp) /\
   all_drifts_ok (spar_ic sp) (spar_ns_cat sp) sds /\
-  all_pdelta_ok (1/5) sds.
+  all_pdelta_ok (pdelta_theta_max (spar_pda sp)) sds.
 
 (* ================================================================ *)
 (*  DECIDABILITY — item 28                                           *)
@@ -1031,13 +1235,31 @@ Proof.
   try (left; tauto); right; tauto.
 Defined.
 
+Lemma strictly_increasing_aux_dec : forall prev l,
+  { strictly_increasing_aux prev l } +
+  { ~ strictly_increasing_aux prev l }.
+Proof.
+  intros prev l. revert prev.
+  induction l as [|s rest IH]; simpl; intros prev.
+  - left. exact I.
+  - destruct (Rgt_dec (st_z s) prev);
+    destruct (IH (st_z s));
+    try (left; tauto); right; tauto.
+Defined.
+
+Lemma strictly_increasing_dec : forall l,
+  { strictly_increasing l } + { ~ strictly_increasing l }.
+Proof.
+  intros. unfold strictly_increasing.
+  apply strictly_increasing_aux_dec.
+Defined.
+
 Lemma well_formed_building_dec : forall b,
   { well_formed_building b } + { ~ well_formed_building b }.
 Proof.
   intros. unfold well_formed_building.
   destruct (Nat.eq_dec (length (bld_stiffnesses b)) (length (bld_storeys b)));
-  destruct (Forall_dec (fun s => st_z s > 0) (fun s => Rgt_dec (st_z s) 0)
-              (bld_storeys b));
+  destruct (strictly_increasing_dec (bld_storeys b));
   destruct (Forall_dec (fun s => st_m s > 0) (fun s => Rgt_dec (st_m s) 0)
               (bld_storeys b));
   destruct (Forall_dec (fun k => k > 0) (fun k => Rgt_dec k 0)
@@ -1062,7 +1284,7 @@ Proof.
   destruct (elevation_regular_dec (bld_masses b) (bld_stiffnesses b));
   destruct (Rle_dec (bld_T1 b) (4 * sp_TC (spar_sp sp)));
   destruct (all_drifts_ok_dec (spar_ic sp) (spar_ns_cat sp) sds);
-  destruct (all_pdelta_ok_dec (1/5) sds);
+  destruct (all_pdelta_ok_dec (pdelta_theta_max (spar_pda sp)) sds);
   try (left; tauto); right; tauto.
 Defined.
 
@@ -1103,5 +1325,5 @@ Extraction "eurocode8.ml"
   Se Sd Fb Fi
   storey_forces
   spectrum_lookup gamma_I q0
-  classify_pdelta pdelta_amplification
+  classify_pdelta pdelta_amplification pdelta_theta_max
   drift_limit nu lambda.
