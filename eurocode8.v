@@ -76,13 +76,33 @@ Definition spectrum_lookup (st : spectrum_type) (gt : ground_type)
   | Type2, GroundE => mk_spectrum_params (8/5)    (1/20)  (1/4)   (6/5)
   end.
 
+(* Well-formedness: corner periods are positive and ordered.         *)
+Definition well_formed_spectrum (p : spectrum_params) : Prop :=
+  sp_S p > 0 /\
+  sp_TB p > 0 /\
+  sp_TB p < sp_TC p /\
+  sp_TC p < sp_TD p.
+
+Lemma spectrum_lookup_wf : forall st gt,
+  well_formed_spectrum (spectrum_lookup st gt).
+Proof.
+  intros st gt; destruct st, gt; unfold well_formed_spectrum; simpl; lra.
+Qed.
+
 (* ================================================================ *)
 (*  ELASTIC RESPONSE SPECTRUM Se(T) — clause 3.2.2.2, eqs 3.2-3.5 *)
 (* ================================================================ *)
 
+(* Damping correction factor: eta = max(sqrt(10/(5+xi)), 0.55).      *)
+(* For 5% damping (xi=5), eta = 1.  Per clause 3.2.2.2.             *)
+Definition eta_min : R := 55 / 100.
+
+Definition eta_valid (eta : R) : Prop := eta >= eta_min.
+
 (* Se(T) for given spectrum parameters, reference PGA ag, and       *)
 (* damping correction factor eta (eta = 1 for 5% damping).         *)
 
+(* Precondition: T >= 0.  Behavior for T < 0 is unspecified.         *)
 Definition Se (p : spectrum_params) (ag eta T : R) : R :=
   if Rle_dec T (sp_TB p) then
     ag * sp_S p * (1 + T / sp_TB p * (eta * (5 / 2) - 1))
@@ -136,8 +156,8 @@ Proof.
     + exfalso. lra.
 Qed.
 
-(* Continuity at TC: Se(TC) agrees with the descending-branch formula. *)
-Lemma Se_continuous_at_TC : forall p ag eta,
+(* Branch agreement at TC: plateau and 1/T branch agree at TC.       *)
+Lemma Se_branch_agreement_at_TC : forall p ag eta,
   sp_TB p < sp_TC p ->
   sp_TC p > 0 ->
   Se p ag eta (sp_TC p) =
@@ -170,8 +190,8 @@ Proof.
       * exfalso. lra.
 Qed.
 
-(* Continuity at TD: Se(TD) agrees with the 1/T^2-branch formula.     *)
-Lemma Se_continuous_at_TD : forall p ag eta,
+(* Branch agreement at TD: 1/T and 1/T^2 branches agree at TD.       *)
+Lemma Se_branch_agreement_at_TD : forall p ag eta,
   sp_TB p < sp_TD p ->
   sp_TC p < sp_TD p ->
   sp_TD p > 0 ->
@@ -294,6 +314,43 @@ Proof.
     + apply Rmult_lt_compat_l; lra.
 Qed.
 
+(* Se(T) >= 0 for non-negative inputs.                               *)
+Lemma Se_nonneg : forall p ag eta T,
+  well_formed_spectrum p ->
+  ag >= 0 -> eta >= 0 -> T >= 0 ->
+  eta * (5 / 2) >= 1 ->
+  Se p ag eta T >= 0.
+Proof.
+  intros p ag eta T [HS [HTB [HTBC HTCD]]] Hag Heta HT Heta25.
+  unfold Se.
+  destruct (Rle_dec T (sp_TB p)).
+  - apply Rle_ge. apply Rmult_le_pos.
+    + apply Rmult_le_pos; lra.
+    + assert (T / sp_TB p >= 0) by (unfold Rdiv; apply Rle_ge;
+        apply Rmult_le_pos; [lra | left; apply Rinv_0_lt_compat; lra]).
+      assert (eta * (5 / 2) - 1 >= 0) by lra.
+      assert (T / sp_TB p * (eta * (5 / 2) - 1) >= 0) by
+        (apply Rle_ge; apply Rmult_le_pos; lra).
+      lra.
+  - destruct (Rle_dec T (sp_TC p)).
+    + apply Rle_ge. apply Rmult_le_pos.
+      * apply Rmult_le_pos; [apply Rmult_le_pos|]; lra.
+      * lra.
+    + destruct (Rle_dec T (sp_TD p)).
+      * apply Rle_ge. apply Rmult_le_pos.
+        -- apply Rmult_le_pos; [apply Rmult_le_pos;
+             [apply Rmult_le_pos|]|]; lra.
+        -- unfold Rdiv. apply Rmult_le_pos; [lra|].
+           left. apply Rinv_0_lt_compat. lra.
+      * apply Rle_ge. apply Rmult_le_pos.
+        -- apply Rmult_le_pos; [apply Rmult_le_pos;
+             [apply Rmult_le_pos|]|]; lra.
+        -- unfold Rdiv. apply Rmult_le_pos.
+           ++ apply Rmult_le_pos; lra.
+           ++ left. apply Rinv_0_lt_compat.
+              apply Rmult_lt_0_compat; lra.
+Qed.
+
 (* ================================================================ *)
 (*  DUCTILITY CLASSES — EN 1998-1-1:2024, clause 5.2.1              *)
 (* ================================================================ *)
@@ -338,6 +395,20 @@ Definition q0 (dc : ductility_class) (ss : structural_system)
   | DCH, InvertedPendulum      => 2
   | DCH, TorsionallyFlexible   => 3
   end.
+
+(* q0 >= 1 for all valid inputs (au_a1 >= 1).                       *)
+Lemma q0_ge_1 : forall dc ss au_a1,
+  au_a1 >= 1 -> q0 dc ss au_a1 >= 1.
+Proof.
+  intros dc ss au_a1 Ha; destruct dc, ss; simpl; lra.
+Qed.
+
+(* q0 upper bound: q0 <= 9/2 * au_a1 for all cases.                 *)
+Lemma q0_upper : forall dc ss au_a1,
+  au_a1 >= 1 -> q0 dc ss au_a1 <= 9 / 2 * au_a1.
+Proof.
+  intros dc ss au_a1 Ha; destruct dc, ss; simpl; lra.
+Qed.
 
 (* ================================================================ *)
 (*  DESIGN SPECTRUM Sd(T) — EN 1998-1-1:2024, clause 3.2.2.5        *)
@@ -393,6 +464,16 @@ Definition lambda (T1 : R) (p : spectrum_params) (n_storeys : nat) : R :=
     if Nat.leb 3 n_storeys then 17 / 20 else 1
   else
     1.
+
+(* lambda always returns 17/20 or 1.                                 *)
+Lemma lambda_values : forall T1 p n,
+  lambda T1 p n = 17 / 20 \/ lambda T1 p n = 1.
+Proof.
+  intros. unfold lambda.
+  destruct (Rle_dec T1 (2 * sp_TC p)).
+  - destruct (Nat.leb 3 n); [left | right]; reflexivity.
+  - right. reflexivity.
+Qed.
 
 (* Base shear force Fb.                                              *)
 Definition Fb (sd_T1 m : R) (lam : R) : R := sd_T1 * m * lam.
@@ -465,12 +546,31 @@ Proof.
   - apply Rinv_0_lt_compat. lra.
 Qed.
 
-(* ================================================================ *)
-(*  DISPLACEMENT AMPLIFICATION — clause 4.3.4                       *)
-(* ================================================================ *)
-
-(* ds = q * de, where de is the elastic displacement from analysis.  *)
-Definition ds (q de : R) : R := q * de.
+(* End-to-end: for valid inputs, Sd >= 0, Fb >= 0, ΣFi = Fb.        *)
+Lemma pipeline_valid : forall st gt ag eta q T1 m lam storeys,
+  ag >= 0 -> eta >= 0 -> q >= 1 -> m >= 0 -> lam > 0 ->
+  T1 >= 0 -> eta * (5 / 2) >= 1 ->
+  sum_zm storeys > 0 ->
+  let p := spectrum_lookup st gt in
+  let sd_val := Sd p ag eta q T1 in
+  let base := Fb sd_val m lam in
+  sd_val >= 0 /\ base >= 0 /\
+  sum_R (storey_forces base storeys) = base.
+Proof.
+  intros st gt ag eta q T1 m lam storeys
+    Hag Heta Hq Hm Hlam HT1 Heta25 Hszm.
+  simpl. split; [|split].
+  - unfold Sd. apply Rle_ge. apply Rle_trans with (beta * ag).
+    + unfold beta. apply Rmult_le_pos; lra.
+    + apply Rmax_r.
+  - unfold Fb. apply Rle_ge.
+    apply Rmult_le_pos; [apply Rmult_le_pos|lra].
+    + apply Rle_trans with (beta * ag).
+      * unfold beta. apply Rmult_le_pos; lra.
+      * unfold Sd. apply Rmax_r.
+    + lra.
+  - apply sum_Fi_eq_Fb. exact Hszm.
+Qed.
 
 (* ================================================================ *)
 (*  DRIFT LIMITS — EN 1998-1-1:2024, clause 4.4.3.2                 *)
@@ -490,27 +590,51 @@ Definition drift_limit (cat : ns_category) : R :=
   | NS_None    => 1 / 100    (* 0.010 h *)
   end.
 
-(* Reduction factor nu for lower return period.                      *)
-Definition nu : R := 1 / 2.
+(* Reduction factor nu for lower return period per importance class.  *)
+(* EN 1998-1-1:2024, clause 4.4.3.2: recommended values.            *)
+Definition nu (ic : importance_class) : R :=
+  match ic with
+  | ClassI   => 2 / 5
+  | ClassII  => 2 / 5
+  | ClassIII => 1 / 2
+  | ClassIV  => 1 / 2
+  end.
 
 (* Drift check: dr * nu <= drift_limit * h.                          *)
-Definition drift_ok (cat : ns_category) (dr h : R) : Prop :=
-  dr * nu <= drift_limit cat * h.
+Definition drift_ok (ic : importance_class) (cat : ns_category)
+    (dr h : R) : Prop :=
+  dr * nu ic <= drift_limit cat * h.
 
 (* Drift check is decidable.                                         *)
-Lemma drift_ok_dec : forall cat dr h,
-  { drift_ok cat dr h } + { ~ drift_ok cat dr h }.
+Lemma drift_ok_dec : forall ic cat dr h,
+  { drift_ok ic cat dr h } + { ~ drift_ok ic cat dr h }.
 Proof.
   intros. unfold drift_ok.
   apply Rle_dec.
-Qed.
+Defined.
 
 (* Ductile drift limit is strictly more permissive than brittle.     *)
-Lemma drift_ductile_more_permissive : forall dr h,
-  h > 0 -> drift_ok NS_Brittle dr h -> drift_ok NS_Ductile dr h.
+Lemma drift_ductile_more_permissive : forall ic dr h,
+  h > 0 -> drift_ok ic NS_Brittle dr h -> drift_ok ic NS_Ductile dr h.
 Proof.
-  intros dr h Hh Hb. unfold drift_ok in *.
+  intros ic dr h Hh Hb. unfold drift_ok in *.
   simpl in *. lra.
+Qed.
+
+(* None is more permissive than ductile.                             *)
+Lemma drift_none_more_permissive : forall ic dr h,
+  h > 0 -> drift_ok ic NS_Ductile dr h -> drift_ok ic NS_None dr h.
+Proof.
+  intros ic dr h Hh Hd. unfold drift_ok in *.
+  simpl in *. lra.
+Qed.
+
+(* Full ordering: None >= Ductile >= Brittle.                        *)
+Lemma drift_ordering : forall ic dr h,
+  h > 0 -> drift_ok ic NS_Brittle dr h -> drift_ok ic NS_None dr h.
+Proof.
+  intros. apply drift_none_more_permissive; [assumption|].
+  apply drift_ductile_more_permissive; assumption.
 Qed.
 
 (* ================================================================ *)
@@ -582,6 +706,19 @@ Proof.
   lra.
 Qed.
 
+(* 1/(1-theta) is strictly increasing on (-inf, 1).                  *)
+Lemma pdelta_amp_increasing : forall th1 th2,
+  th1 < th2 -> th2 < 1 ->
+  pdelta_amplification th1 < pdelta_amplification th2.
+Proof.
+  intros th1 th2 H12 H2.
+  unfold pdelta_amplification, Rdiv.
+  rewrite !Rmult_1_l.
+  apply Rinv_lt_contravar.
+  - apply Rmult_lt_0_compat; lra.
+  - lra.
+Qed.
+
 (* ================================================================ *)
 (*  REGULARITY — EN 1998-1-1:2024, clause 4.2.3                     *)
 (* ================================================================ *)
@@ -590,8 +727,8 @@ Qed.
 (* radius >= ls.  Parameters: eccentricity e0, torsional radius r,   *)
 (* radius of gyration ls.                                            *)
 Definition plan_regular (e0x e0y rx ry ls : R) : Prop :=
-  e0x <= 3/10 * rx /\
-  e0y <= 3/10 * ry /\
+  Rabs e0x <= 3/10 * rx /\
+  Rabs e0y <= 3/10 * ry /\
   rx >= ls /\
   ry >= ls.
 
@@ -613,9 +750,12 @@ Definition mass_ratio_ok (m1 m2 : R) : Prop :=
   m2 <= 3/2 * m1 /\ m1 <= 3/2 * m2.
 
 (* Stiffness does not decrease abruptly (within 30% of storey above). *)
+(* Lists are ordered ground floor first: [k_storey1, k_storey2, ...] *)
+(* all_adjacent checks consecutive pairs (k_i, k_{i+1}) bottom-up.  *)
 Definition stiffness_continuity (k_below k_above : R) : Prop :=
   k_below >= 7/10 * k_above.
 
+(* Lists ordered ground floor first.                                  *)
 Definition elevation_regular (masses stiffnesses : list R) : Prop :=
   all_adjacent mass_ratio_ok masses /\
   all_adjacent stiffness_continuity stiffnesses.
@@ -637,10 +777,11 @@ Qed.
 
 Record building : Type := mk_building {
   bld_storeys    : list storey;
-  bld_masses     : list R;
   bld_stiffnesses: list R;
   bld_T1         : R;       (* fundamental period *)
-  bld_n_storeys  : nat;
+  bld_dc         : ductility_class;
+  bld_ss         : structural_system;
+  bld_au_a1      : R;       (* overstrength ratio αu/α1 *)
   bld_e0x        : R;       (* eccentricity x *)
   bld_e0y        : R;       (* eccentricity y *)
   bld_rx         : R;       (* torsional radius x *)
@@ -648,75 +789,131 @@ Record building : Type := mk_building {
   bld_ls         : R;       (* radius of gyration *)
 }.
 
+(* Derived fields.                                                    *)
+Definition bld_masses (b : building) : list R :=
+  map st_m (bld_storeys b).
+
+Definition bld_n_storeys (b : building) : nat :=
+  length (bld_storeys b).
+
+(* Building well-formedness: values sensible, stiffness list matches. *)
+Definition well_formed_building (b : building) : Prop :=
+  length (bld_stiffnesses b) = length (bld_storeys b) /\
+  Forall (fun s => st_z s > 0) (bld_storeys b) /\
+  Forall (fun s => st_m s > 0) (bld_storeys b) /\
+  Forall (fun k => k > 0) (bld_stiffnesses b) /\
+  bld_T1 b > 0 /\
+  bld_au_a1 b >= 1.
+
 Record seismic_params : Type := mk_seismic_params {
+  spar_ic     : importance_class;
   spar_sp     : spectrum_params;
-  spar_ag     : R;
+  spar_agR    : R;       (* reference peak ground acceleration *)
   spar_eta    : R;
   spar_q      : R;
   spar_ns_cat : ns_category;
 }.
 
+(* Design ground acceleration: ag = γI * agR.                        *)
+Definition spar_ag (sp : seismic_params) : R :=
+  gamma_I (spar_ic sp) * spar_agR sp.
+
 (* Per-storey verification data for drift and P-Delta checks.       *)
 Record storey_data : Type := mk_storey_data {
   sd_dr    : R;   (* design interstorey drift *)
   sd_h     : R;   (* storey height *)
-  sd_theta : R;   (* P-delta coefficient for this storey *)
+  sd_Ptot  : R;   (* total gravity load above this storey *)
+  sd_Vtot  : R;   (* total seismic shear at this storey *)
 }.
 
-Fixpoint all_drifts_ok (cat : ns_category)
+(* Derive theta from storey data fields.                             *)
+Definition sd_theta (sd : storey_data) : R :=
+  theta (sd_Ptot sd) (sd_dr sd) (sd_Vtot sd) (sd_h sd).
+
+(* Storey data must match building: same count and positive values.  *)
+Fixpoint storey_data_consistent (storeys : list storey)
+    (sds : list storey_data) : Prop :=
+  match storeys, sds with
+  | nil, nil => True
+  | s :: sr, sd :: sdr =>
+      sd_h sd > 0 /\ sd_Vtot sd > 0 /\ sd_Ptot sd >= 0 /\
+      sd_dr sd >= 0 /\
+      storey_data_consistent sr sdr
+  | _, _ => False   (* length mismatch *)
+  end.
+
+Fixpoint all_drifts_ok (ic : importance_class) (cat : ns_category)
     (sds : list storey_data) : Prop :=
   match sds with
   | nil => True
   | sd :: rest =>
-      drift_ok cat (sd_dr sd) (sd_h sd) /\ all_drifts_ok cat rest
+      drift_ok ic cat (sd_dr sd) (sd_h sd) /\ all_drifts_ok ic cat rest
   end.
 
 Fixpoint all_pdelta_ok (sds : list storey_data) : Prop :=
   match sds with
   | nil => True
-  | sd :: rest => sd_theta sd <= 3/10 /\ all_pdelta_ok rest
+  | sd :: rest => sd_theta sd <= 1/5 /\ all_pdelta_ok rest
   end.
 
 Definition ec8_compliant (b : building) (sp : seismic_params)
     (sds : list storey_data) : Prop :=
+  spar_q sp = q0 (bld_dc b) (bld_ss b) (bld_au_a1 b) /\
+  storey_data_consistent (bld_storeys b) sds /\
   plan_regular (bld_e0x b) (bld_e0y b) (bld_rx b) (bld_ry b) (bld_ls b) /\
   elevation_regular (bld_masses b) (bld_stiffnesses b) /\
   bld_T1 b <= 4 * sp_TC (spar_sp sp) /\
-  all_drifts_ok (spar_ns_cat sp) sds /\
+  all_drifts_ok (spar_ic sp) (spar_ns_cat sp) sds /\
   all_pdelta_ok sds.
 
 (* ================================================================ *)
 (*  DECIDABILITY — item 28                                           *)
 (* ================================================================ *)
 
+Lemma storey_data_consistent_dec : forall storeys sds,
+  { storey_data_consistent storeys sds } +
+  { ~ storey_data_consistent storeys sds }.
+Proof.
+  induction storeys as [|s sr IH]; destruct sds as [|sd sdr]; simpl.
+  - left. exact I.
+  - right. tauto.
+  - right. tauto.
+  - destruct (Rgt_dec (sd_h sd) 0);
+    destruct (Rgt_dec (sd_Vtot sd) 0);
+    destruct (Rge_dec (sd_Ptot sd) 0);
+    destruct (Rge_dec (sd_dr sd) 0);
+    destruct (IH sdr);
+    try (left; tauto); right; tauto.
+Defined.
+
 Lemma plan_regular_dec : forall e0x e0y rx ry ls,
   { plan_regular e0x e0y rx ry ls } + { ~ plan_regular e0x e0y rx ry ls }.
 Proof.
   intros. unfold plan_regular.
-  destruct (Rle_dec e0x (3/10 * rx));
-  destruct (Rle_dec e0y (3/10 * ry));
+  destruct (Rle_dec (Rabs e0x) (3/10 * rx));
+  destruct (Rle_dec (Rabs e0y) (3/10 * ry));
   destruct (Rge_dec rx ls);
   destruct (Rge_dec ry ls);
   try (left; tauto); right; tauto.
-Qed.
+Defined.
 
-Lemma all_drifts_ok_dec : forall cat sds,
-  { all_drifts_ok cat sds } + { ~ all_drifts_ok cat sds }.
+Lemma all_drifts_ok_dec : forall ic cat sds,
+  { all_drifts_ok ic cat sds } + { ~ all_drifts_ok ic cat sds }.
 Proof.
-  intros cat sds. induction sds as [|sd rest IH]; simpl.
+  intros ic cat sds. induction sds as [|sd rest IH]; simpl.
   - left. exact I.
-  - destruct (drift_ok_dec cat (sd_dr sd) (sd_h sd));
+  - destruct (drift_ok_dec ic cat (sd_dr sd) (sd_h sd));
     destruct IH; try (left; tauto); right; tauto.
-Qed.
+Defined.
 
 Lemma all_pdelta_ok_dec : forall sds,
   { all_pdelta_ok sds } + { ~ all_pdelta_ok sds }.
 Proof.
   induction sds as [|sd rest IH]; simpl.
   - left. exact I.
-  - destruct (Rle_dec (sd_theta sd) (3/10));
+  - destruct (Rle_dec (sd_theta sd) (1/5));
     destruct IH; try (left; tauto); right; tauto.
-Qed.
+Defined.
 
 (* Helper: decidability for mass_ratio_ok.                           *)
 Lemma mass_ratio_ok_dec : forall m1 m2,
@@ -726,13 +923,13 @@ Proof.
   destruct (Rle_dec m2 (3/2 * m1));
   destruct (Rle_dec m1 (3/2 * m2));
   try (left; tauto); right; tauto.
-Qed.
+Defined.
 
 Lemma stiffness_continuity_dec : forall k1 k2,
   { stiffness_continuity k1 k2 } + { ~ stiffness_continuity k1 k2 }.
 Proof.
   intros. unfold stiffness_continuity. apply Rge_dec.
-Qed.
+Defined.
 
 Lemma all_adjacent_dec : forall {A : Type} (P : A -> A -> Prop)
     (P_dec : forall x y, { P x y } + { ~ P x y }) (l : list A),
@@ -744,7 +941,7 @@ Proof.
     + left. exact I.
     + destruct (P_dec x y); destruct IH;
       try (left; tauto); right; tauto.
-Qed.
+Defined.
 
 Lemma elevation_regular_dec : forall masses stiffnesses,
   { elevation_regular masses stiffnesses } +
@@ -755,20 +952,22 @@ Proof.
   destruct (all_adjacent_dec stiffness_continuity stiffness_continuity_dec
               stiffnesses);
   try (left; tauto); right; tauto.
-Qed.
+Defined.
 
 Theorem ec8_compliant_dec : forall b sp sds,
   { ec8_compliant b sp sds } + { ~ ec8_compliant b sp sds }.
 Proof.
   intros. unfold ec8_compliant.
+  destruct (Req_EM_T (spar_q sp) (q0 (bld_dc b) (bld_ss b) (bld_au_a1 b)));
+  destruct (storey_data_consistent_dec (bld_storeys b) sds);
   destruct (plan_regular_dec (bld_e0x b) (bld_e0y b)
               (bld_rx b) (bld_ry b) (bld_ls b));
   destruct (elevation_regular_dec (bld_masses b) (bld_stiffnesses b));
   destruct (Rle_dec (bld_T1 b) (4 * sp_TC (spar_sp sp)));
-  destruct (all_drifts_ok_dec (spar_ns_cat sp) sds);
+  destruct (all_drifts_ok_dec (spar_ic sp) (spar_ns_cat sp) sds);
   destruct (all_pdelta_ok_dec sds);
   try (left; tauto); right; tauto.
-Qed.
+Defined.
 
 (* ================================================================ *)
 (*  EXTRACTION — item 29                                             *)
@@ -786,15 +985,17 @@ Extract Inlined Constant Rminus => "( -. )".
 Extract Inlined Constant Rdiv => "(fun a b -> a /. b)".
 Extract Inlined Constant Rinv => "(fun x -> 1.0 /. x)".
 Extract Inlined Constant Rle_dec => "(fun a b -> if a <= b then true else false)".
-Extract Inlined Constant Rge_dec => "(fun a b -> if a >= b then if a = b then true else true else false)".
+Extract Inlined Constant Rge_dec => "(fun a b -> if a >= b then true else false)".
 Extract Inlined Constant Ropp => "(fun x -> ~-. x)".
 Extract Inlined Constant Rabs => "(fun x -> Float.abs x)".
 Extract Inlined Constant Rmax => "(fun a b -> if a >= b then a else b)".
 
+Set Extraction Output Directory ".".
+
 Extraction "eurocode8.ml"
   ec8_compliant_dec
   Se Sd Fb Fi
-  storey_forces sum_Fi_eq_Fb
+  storey_forces
   spectrum_lookup gamma_I q0
   classify_pdelta pdelta_amplification
-  drift_limit lambda.
+  drift_limit nu lambda.
