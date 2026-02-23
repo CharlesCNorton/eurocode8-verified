@@ -97,7 +97,26 @@ Qed.
 (* For 5% damping (xi=5), eta = 1.  Per clause 3.2.2.2.             *)
 Definition eta_min : R := 55 / 100.
 
-Definition eta_valid (eta : R) : Prop := eta >= eta_min.
+(* Compute eta from damping ratio xi (percent).                        *)
+(* eta = max(sqrt(10 / (5 + xi)), 0.55) per clause 3.2.2.2.          *)
+Definition compute_eta (xi : R) : R :=
+  Rmax (sqrt (10 / (5 + xi))) eta_min.
+
+(* compute_eta always returns at least eta_min.                        *)
+Lemma compute_eta_ge_min : forall xi,
+  compute_eta xi >= eta_min.
+Proof.
+  intro. unfold compute_eta. apply Rle_ge. apply Rmax_r.
+Qed.
+
+(* At 5% damping, eta = 1.                                            *)
+Lemma compute_eta_5 : compute_eta 5 = 1.
+Proof.
+  unfold compute_eta, eta_min.
+  replace (10 / (5 + 5)) with 1 by field.
+  rewrite sqrt_1.
+  apply Rmax_left. lra.
+Qed.
 
 (* Se(T) for given spectrum parameters, reference PGA ag, and       *)
 (* damping correction factor eta (eta = 1 for 5% damping).         *)
@@ -552,6 +571,32 @@ Proof.
 Qed.
 
 (* ================================================================ *)
+(*  VERTICAL SEISMIC ACTION — EN 1998-1:2004, clause 3.2.2.3      *)
+(* ================================================================ *)
+
+(* Vertical spectrum parameters: TB = 0.05, TC = 0.15, TD = 1.0.    *)
+(* S = 1 (no soil amplification for vertical component).             *)
+Definition vertical_spectrum_params : spectrum_params :=
+  mk_spectrum_params 1 (1/20) (3/20) 1.
+
+(* Ratio avg/ag depends on spectrum type.                            *)
+(* Type 1: avg = 0.90 * ag.  Type 2: avg = 0.45 * ag.               *)
+Definition avg_ratio (st : spectrum_type) : R :=
+  match st with
+  | Type1 => 9/10
+  | Type2 => 9/20
+  end.
+
+(* Vertical elastic response spectrum, reusing Se.                   *)
+Definition Sve (st : spectrum_type) (ag eta T : R) : R :=
+  Se vertical_spectrum_params (avg_ratio st * ag) eta T.
+
+Lemma vertical_spectrum_wf : well_formed_spectrum vertical_spectrum_params.
+Proof.
+  unfold well_formed_spectrum, vertical_spectrum_params. simpl. lra.
+Qed.
+
+(* ================================================================ *)
 (*  DUCTILITY CLASSES — EN 1998-1:2004, clause 5.2.1              *)
 (* ================================================================ *)
 
@@ -679,6 +724,37 @@ Qed.
 Definition Fb (sd_T1 m : R) (lam : R) : R := sd_T1 * m * lam.
 
 (* ================================================================ *)
+(*  ACCIDENTAL TORSION — EN 1998-1:2004, clause 4.3.3.2.4         *)
+(* ================================================================ *)
+
+(* Amplification factor for accidental torsional effects.             *)
+(* delta = 1 + 0.6 * x / Le, where x is the distance from the       *)
+(* centre of mass and Le is the distance between the two outermost   *)
+(* lateral load-resisting elements.  Applied to storey forces.       *)
+Definition torsion_amplification (x Le : R) : R :=
+  1 + 3/5 * x / Le.
+
+(* delta >= 1 for non-negative x and positive Le.                    *)
+Lemma torsion_amp_ge_1 : forall x Le,
+  x >= 0 -> Le > 0 -> torsion_amplification x Le >= 1.
+Proof.
+  intros x Le Hx HLe. unfold torsion_amplification.
+  assert (3/5 * x / Le >= 0).
+  { unfold Rdiv. apply Rle_ge.
+    apply Rmult_le_pos.
+    - apply Rmult_le_pos; lra.
+    - left. apply Rinv_0_lt_compat. lra. }
+  lra.
+Qed.
+
+(* Maximum delta occurs at x = Le/2 (outermost position).            *)
+Lemma torsion_amp_max : forall Le,
+  Le > 0 -> torsion_amplification (Le / 2) Le = 13/10.
+Proof.
+  intros Le HLe. unfold torsion_amplification. field. lra.
+Qed.
+
+(* ================================================================ *)
 (*  STOREY FORCE DISTRIBUTION — clause 4.3.3.2.3                    *)
 (* ================================================================ *)
 
@@ -780,6 +856,41 @@ Qed.
 (* The drift check requires dr to already include this factor, i.e.  *)
 (* dr = q * dr_elastic.                                              *)
 Definition ds (q de : R) : R := q * de.
+
+(* ================================================================ *)
+(*  COMBINATION OF SEISMIC COMPONENTS — clause 4.3.3.5.1            *)
+(* ================================================================ *)
+
+(* SRSS combination: E = sqrt(Ex^2 + Ey^2).                          *)
+Definition combine_srss (ex ey : R) : R :=
+  sqrt (ex * ex + ey * ey).
+
+(* 100%+30% rule: E = max(|Ex|+0.30*|Ey|, 0.30*|Ex|+|Ey|).          *)
+Definition combine_30pct (ex ey : R) : R :=
+  Rmax (Rabs ex + 3/10 * Rabs ey) (3/10 * Rabs ex + Rabs ey).
+
+(* Both methods are permitted by the code; neither dominates the     *)
+(* other in general (SRSS > 30% when ex ≈ ey, 30% > SRSS when one   *)
+(* component dominates).                                             *)
+
+(* SRSS is non-negative.                                             *)
+Lemma combine_srss_nonneg : forall ex ey,
+  combine_srss ex ey >= 0.
+Proof.
+  intros. unfold combine_srss.
+  apply Rle_ge. apply sqrt_pos.
+Qed.
+
+(* 30% rule is non-negative.                                         *)
+Lemma combine_30pct_nonneg : forall ex ey,
+  combine_30pct ex ey >= 0.
+Proof.
+  intros. unfold combine_30pct.
+  apply Rle_ge.
+  apply Rle_trans with (Rabs ex + 3/10 * Rabs ey).
+  - generalize (Rabs_pos ex). generalize (Rabs_pos ey). lra.
+  - apply Rmax_l.
+Qed.
 
 (* ================================================================ *)
 (*  DRIFT LIMITS — EN 1998-1:2004, clause 4.4.3.2                 *)
@@ -945,10 +1056,10 @@ Qed.
 (*  REGULARITY — EN 1998-1:2004, clause 4.2.3                     *)
 (* ================================================================ *)
 
-(* Plan regularity: compactness, eccentricity <= 0.30*r, torsional   *)
-(* radius >= ls.  Parameters: eccentricity e0, torsional radius r,   *)
-(* radius of gyration ls.                                            *)
-Definition plan_regular (e0x e0y rx ry ls : R) : Prop :=
+(* Plan regularity: compactness (clause 4.2.3.2), eccentricity       *)
+(* <= 0.30*r, torsional radius >= ls.                                *)
+Definition plan_regular (e0x e0y rx ry ls compactness : R) : Prop :=
+  compactness >= 19/20 /\
   Rabs e0x <= 3/10 * rx /\
   Rabs e0y <= 3/10 * ry /\
   rx >= ls /\
@@ -977,18 +1088,38 @@ Definition mass_ratio_ok (m1 m2 : R) : Prop :=
 Definition stiffness_continuity (k_below k_above : R) : Prop :=
   k_below >= 7/10 * k_above.
 
+(* Stiffness must be >= 80% of average of three storeys above.        *)
+(* Clause 4.2.3.3: k_i >= 0.8 * (k_{i+1} + k_{i+2} + k_{i+3}) / 3. *)
+(* Only applies when at least three storeys exist above.              *)
+Fixpoint stiffness_avg3_ok (ks : list R) : Prop :=
+  match ks with
+  | k :: ((k1 :: k2 :: k3 :: _) as rest) =>
+      k >= 4/5 * ((k1 + k2 + k3) / 3) /\
+      stiffness_avg3_ok rest
+  | _ => True
+  end.
+
+(* Setback constraint: upper storey plan area >= 80% of lower.        *)
+(* Clause 4.2.3.3: setbacks shall not exceed 20% at any floor.       *)
+Definition setback_ok (area_below area_above : R) : Prop :=
+  area_above >= 4/5 * area_below.
+
 (* Lists ordered ground floor first.                                  *)
-Definition elevation_regular (masses stiffnesses : list R) : Prop :=
+Definition elevation_regular (masses stiffnesses plan_areas : list R)
+    : Prop :=
   all_adjacent mass_ratio_ok masses /\
-  all_adjacent stiffness_continuity stiffnesses.
+  all_adjacent stiffness_continuity stiffnesses /\
+  stiffness_avg3_ok stiffnesses /\
+  all_adjacent setback_ok plan_areas.
 
 (* Plan-regular and elevation-regular implies lateral force method    *)
 (* is applicable (given the period condition T1 <= 4*TC).            *)
-Lemma regularity_implies_lfm : forall T1 p e0x e0y rx ry ls masses stiffs,
-  plan_regular e0x e0y rx ry ls ->
-  elevation_regular masses stiffs ->
+Lemma regularity_implies_lfm :
+  forall T1 p e0x e0y rx ry ls c masses stiffs areas,
+  plan_regular e0x e0y rx ry ls c ->
+  elevation_regular masses stiffs areas ->
   T1 <= 4 * sp_TC p ->
-  lateral_force_applicable T1 p (elevation_regular masses stiffs).
+  lateral_force_applicable T1 p (elevation_regular masses stiffs areas).
 Proof.
   intros. unfold lateral_force_applicable. split; assumption.
 Qed.
@@ -998,17 +1129,22 @@ Qed.
 (* ================================================================ *)
 
 Record building : Type := mk_building {
-  bld_storeys    : list storey;
-  bld_stiffnesses: list R;
-  bld_T1         : R;       (* fundamental period *)
-  bld_dc         : ductility_class;
-  bld_ss         : structural_system;
-  bld_au_a1      : R;       (* overstrength ratio αu/α1 *)
-  bld_e0x        : R;       (* eccentricity x *)
-  bld_e0y        : R;       (* eccentricity y *)
-  bld_rx         : R;       (* torsional radius x *)
-  bld_ry         : R;       (* torsional radius y *)
-  bld_ls         : R;       (* radius of gyration *)
+  bld_storeys      : list storey;
+  bld_stiffnesses_x: list R;  (* per-storey lateral stiffness, x direction *)
+  bld_stiffnesses_y: list R;  (* per-storey lateral stiffness, y direction *)
+  bld_weights      : list R;  (* per-storey gravity load in seismic design situation *)
+  bld_T1_x         : R;       (* fundamental period, x direction *)
+  bld_T1_y         : R;       (* fundamental period, y direction *)
+  bld_dc           : ductility_class;
+  bld_ss           : structural_system;
+  bld_au_a1        : R;       (* overstrength ratio αu/α1 *)
+  bld_e0x          : R;       (* eccentricity x *)
+  bld_e0y          : R;       (* eccentricity y *)
+  bld_rx           : R;       (* torsional radius x *)
+  bld_ry           : R;       (* torsional radius y *)
+  bld_ls           : R;       (* radius of gyration *)
+  bld_compactness  : R;       (* plan area / convex hull area *)
+  bld_plan_areas   : list R;  (* per-storey plan area, ground up *)
 }.
 
 (* Derived fields.                                                    *)
@@ -1029,28 +1165,83 @@ Fixpoint strictly_increasing_aux (prev : R) (l : list storey) : Prop :=
 Definition strictly_increasing (l : list storey) : Prop :=
   strictly_increasing_aux 0 l.
 
-(* Building well-formedness: values sensible, stiffness list matches. *)
+(* Building well-formedness: values sensible, lists match in length.  *)
 Definition well_formed_building (b : building) : Prop :=
-  length (bld_stiffnesses b) = length (bld_storeys b) /\
+  length (bld_stiffnesses_x b) = length (bld_storeys b) /\
+  length (bld_stiffnesses_y b) = length (bld_storeys b) /\
+  length (bld_weights b) = length (bld_storeys b) /\
+  length (bld_plan_areas b) = length (bld_storeys b) /\
   strictly_increasing (bld_storeys b) /\
   Forall (fun s => st_m s > 0) (bld_storeys b) /\
-  Forall (fun k => k > 0) (bld_stiffnesses b) /\
-  bld_T1 b > 0 /\
+  Forall (fun k => k > 0) (bld_stiffnesses_x b) /\
+  Forall (fun k => k > 0) (bld_stiffnesses_y b) /\
+  Forall (fun w => w > 0) (bld_weights b) /\
+  Forall (fun a => a > 0) (bld_plan_areas b) /\
+  bld_T1_x b > 0 /\
+  bld_T1_y b > 0 /\
   bld_au_a1 b >= 1.
 
 Record seismic_params : Type := mk_seismic_params {
   spar_ic     : importance_class;
   spar_sp     : spectrum_params;
   spar_agR    : R;       (* reference peak ground acceleration *)
-  spar_eta    : R;
+  spar_xi     : R;       (* damping ratio in percent *)
   spar_q      : R;
   spar_ns_cat : ns_category;
   spar_pda    : pdelta_analysis;
 }.
 
+(* Derived damping correction factor from damping ratio.               *)
+Definition spar_eta (sp : seismic_params) : R :=
+  compute_eta (spar_xi sp).
+
 (* Design ground acceleration: ag = γI * agR.                        *)
 Definition spar_ag (sp : seismic_params) : R :=
   gamma_I (spar_ic sp) * spar_agR sp.
+
+(* ================================================================ *)
+(*  COMPUTED STOREY DATA — derived from building model               *)
+(* ================================================================ *)
+
+(* Interstorey heights from cumulative storey elevations.            *)
+Fixpoint storey_heights_aux (prev_z : R) (storeys : list storey)
+    : list R :=
+  match storeys with
+  | nil => nil
+  | s :: rest => (st_z s - prev_z) :: storey_heights_aux (st_z s) rest
+  end.
+
+Definition storey_heights (storeys : list storey) : list R :=
+  storey_heights_aux 0 storeys.
+
+(* Suffix sums: [x1;x2;x3] -> [x1+x2+x3; x2+x3; x3].             *)
+(* Used for cumulative shear and gravity loads from top.             *)
+Fixpoint suffix_sums (l : list R) : list R :=
+  match l with
+  | nil => nil
+  | x :: rest => (x + sum_R rest) :: suffix_sums rest
+  end.
+
+(* Storey shears: cumulative lateral forces from top.                *)
+Definition storey_shears (fb : R) (storeys : list storey) : list R :=
+  suffix_sums (storey_forces fb storeys).
+
+(* Gravity loads above each storey (suffix sum of weights).          *)
+Definition storey_gravities (weights : list R) : list R :=
+  suffix_sums weights.
+
+(* Zip two lists with a binary operation.                            *)
+Fixpoint zip_with {A B C : Type} (f : A -> B -> C)
+    (l1 : list A) (l2 : list B) : list C :=
+  match l1, l2 with
+  | x :: r1, y :: r2 => f x y :: zip_with f r1 r2
+  | _, _ => nil
+  end.
+
+(* Design interstorey drifts: dr_i = q * V_i / k_i.                 *)
+Definition storey_drifts (q : R) (shears stiffnesses : list R)
+    : list R :=
+  zip_with (fun v k => q * v / k) shears stiffnesses.
 
 (* Per-storey verification data for drift and P-Delta checks.       *)
 Record storey_data : Type := mk_storey_data {
@@ -1064,23 +1255,27 @@ Record storey_data : Type := mk_storey_data {
 Definition sd_theta (sd : storey_data) : R :=
   theta (sd_Ptot sd) (sd_dr sd) (sd_Vtot sd) (sd_h sd).
 
-(* Storey data must match building: same count, positive values,     *)
-(* and sd_h matches interstorey height (z_i - z_{i-1}).              *)
-Fixpoint storey_data_consistent_aux (prev_z : R) (storeys : list storey)
-    (sds : list storey_data) : Prop :=
-  match storeys, sds with
-  | nil, nil => True
-  | s :: sr, sd :: sdr =>
-      sd_h sd = st_z s - prev_z /\
-      sd_h sd > 0 /\ sd_Vtot sd > 0 /\ sd_Ptot sd >= 0 /\
-      sd_dr sd >= 0 /\
-      storey_data_consistent_aux (st_z s) sr sdr
-  | _, _ => False   (* length mismatch *)
+(* Build storey_data list from four parallel lists.                  *)
+Fixpoint build_storey_data (drs hs ps vs : list R) : list storey_data :=
+  match drs, hs, ps, vs with
+  | dr :: drs', h :: hs', p :: ps', v :: vs' =>
+      mk_storey_data dr h p v :: build_storey_data drs' hs' ps' vs'
+  | _, _, _, _ => nil
   end.
 
-Definition storey_data_consistent (storeys : list storey)
-    (sds : list storey_data) : Prop :=
-  storey_data_consistent_aux 0 storeys sds.
+(* Compute storey data for one direction given stiffnesses and T1.   *)
+Definition compute_storey_data (b : building) (sp : seismic_params)
+    (stiffnesses : list R) (T1 : R) : list storey_data :=
+  let lam := lambda T1 (spar_sp sp) (bld_n_storeys b) in
+  let ag := gamma_I (spar_ic sp) * spar_agR sp in
+  let sd_val := Sd (spar_sp sp) ag (spar_eta sp) (spar_q sp) T1 in
+  let m_total := sum_R (map st_m (bld_storeys b)) in
+  let base_shear := Fb sd_val m_total lam in
+  let shears := storey_shears base_shear (bld_storeys b) in
+  let heights := storey_heights (bld_storeys b) in
+  let gravities := storey_gravities (bld_weights b) in
+  let drifts := storey_drifts (spar_q sp) shears stiffnesses in
+  build_storey_data drifts heights gravities shears.
 
 Fixpoint all_drifts_ok (ic : importance_class) (cat : ns_category)
     (sds : list storey_data) : Prop :=
@@ -1098,55 +1293,37 @@ Fixpoint all_pdelta_ok (theta_max : R) (sds : list storey_data) : Prop :=
   | sd :: rest => sd_theta sd <= theta_max /\ all_pdelta_ok theta_max rest
   end.
 
-Definition ec8_compliant (b : building) (sp : seismic_params)
-    (sds : list storey_data) : Prop :=
+Definition ec8_compliant (b : building) (sp : seismic_params) : Prop :=
+  let sds_x := compute_storey_data b sp (bld_stiffnesses_x b) (bld_T1_x b) in
+  let sds_y := compute_storey_data b sp (bld_stiffnesses_y b) (bld_T1_y b) in
   well_formed_building b /\
   well_formed_spectrum (spar_sp sp) /\
   spar_q sp = q0 (bld_dc b) (bld_ss b) (bld_au_a1 b) /\
-  spar_eta sp >= eta_min /\
+  spar_xi sp >= 0 /\
   spar_agR sp > 0 /\
-  storey_data_consistent (bld_storeys b) sds /\
-  plan_regular (bld_e0x b) (bld_e0y b) (bld_rx b) (bld_ry b) (bld_ls b) /\
-  elevation_regular (bld_masses b) (bld_stiffnesses b) /\
-  bld_T1 b <= 4 * sp_TC (spar_sp sp) /\
-  all_drifts_ok (spar_ic sp) (spar_ns_cat sp) sds /\
-  all_pdelta_ok (pdelta_theta_max (spar_pda sp)) sds.
+  plan_regular (bld_e0x b) (bld_e0y b) (bld_rx b) (bld_ry b) (bld_ls b)
+    (bld_compactness b) /\
+  elevation_regular (bld_masses b) (bld_stiffnesses_x b)
+    (bld_plan_areas b) /\
+  elevation_regular (bld_masses b) (bld_stiffnesses_y b)
+    (bld_plan_areas b) /\
+  bld_T1_x b <= 4 * sp_TC (spar_sp sp) /\
+  bld_T1_y b <= 4 * sp_TC (spar_sp sp) /\
+  all_drifts_ok (spar_ic sp) (spar_ns_cat sp) sds_x /\
+  all_drifts_ok (spar_ic sp) (spar_ns_cat sp) sds_y /\
+  all_pdelta_ok (pdelta_theta_max (spar_pda sp)) sds_x /\
+  all_pdelta_ok (pdelta_theta_max (spar_pda sp)) sds_y.
 
 (* ================================================================ *)
 (*  DECIDABILITY — item 28                                           *)
 (* ================================================================ *)
 
-Lemma storey_data_consistent_aux_dec : forall prev_z storeys sds,
-  { storey_data_consistent_aux prev_z storeys sds } +
-  { ~ storey_data_consistent_aux prev_z storeys sds }.
-Proof.
-  intros prev_z storeys.
-  revert prev_z.
-  induction storeys as [|s sr IH]; destruct sds as [|sd sdr]; simpl; intros.
-  - left. exact I.
-  - right. tauto.
-  - right. tauto.
-  - destruct (Req_EM_T (sd_h sd) (st_z s - prev_z));
-    destruct (Rgt_dec (sd_h sd) 0);
-    destruct (Rgt_dec (sd_Vtot sd) 0);
-    destruct (Rge_dec (sd_Ptot sd) 0);
-    destruct (Rge_dec (sd_dr sd) 0);
-    destruct (IH (st_z s) sdr);
-    try (left; tauto); right; tauto.
-Defined.
-
-Lemma storey_data_consistent_dec : forall storeys sds,
-  { storey_data_consistent storeys sds } +
-  { ~ storey_data_consistent storeys sds }.
-Proof.
-  intros. unfold storey_data_consistent.
-  apply storey_data_consistent_aux_dec.
-Defined.
-
-Lemma plan_regular_dec : forall e0x e0y rx ry ls,
-  { plan_regular e0x e0y rx ry ls } + { ~ plan_regular e0x e0y rx ry ls }.
+Lemma plan_regular_dec : forall e0x e0y rx ry ls compactness,
+  { plan_regular e0x e0y rx ry ls compactness } +
+  { ~ plan_regular e0x e0y rx ry ls compactness }.
 Proof.
   intros. unfold plan_regular.
+  destruct (Rge_dec compactness (19/20));
   destruct (Rle_dec (Rabs e0x) (3/10 * rx));
   destruct (Rle_dec (Rabs e0y) (3/10 * ry));
   destruct (Rge_dec rx ls);
@@ -1200,14 +1377,38 @@ Proof.
       try (left; tauto); right; tauto.
 Defined.
 
-Lemma elevation_regular_dec : forall masses stiffnesses,
-  { elevation_regular masses stiffnesses } +
-  { ~ elevation_regular masses stiffnesses }.
+Lemma setback_ok_dec : forall a1 a2,
+  { setback_ok a1 a2 } + { ~ setback_ok a1 a2 }.
+Proof.
+  intros. unfold setback_ok. apply Rge_dec.
+Defined.
+
+Lemma stiffness_avg3_ok_dec : forall ks,
+  { stiffness_avg3_ok ks } + { ~ stiffness_avg3_ok ks }.
+Proof.
+  intros ks. induction ks as [|k rest IH]; simpl.
+  - left. exact I.
+  - destruct rest as [|k1 rest1].
+    + left. exact I.
+    + destruct rest1 as [|k2 rest2].
+      * left. exact I.
+      * destruct rest2 as [|k3 rest3].
+        -- left. exact I.
+        -- destruct (Rge_dec k (4/5 * ((k1 + k2 + k3) / 3)));
+           destruct IH;
+           try (left; tauto); right; tauto.
+Defined.
+
+Lemma elevation_regular_dec : forall masses stiffnesses plan_areas,
+  { elevation_regular masses stiffnesses plan_areas } +
+  { ~ elevation_regular masses stiffnesses plan_areas }.
 Proof.
   intros. unfold elevation_regular.
   destruct (all_adjacent_dec mass_ratio_ok mass_ratio_ok_dec masses);
   destruct (all_adjacent_dec stiffness_continuity stiffness_continuity_dec
               stiffnesses);
+  destruct (stiffness_avg3_ok_dec stiffnesses);
+  destruct (all_adjacent_dec setback_ok setback_ok_dec plan_areas);
   try (left; tauto); right; tauto.
 Defined.
 
@@ -1258,33 +1459,50 @@ Lemma well_formed_building_dec : forall b,
   { well_formed_building b } + { ~ well_formed_building b }.
 Proof.
   intros. unfold well_formed_building.
-  destruct (Nat.eq_dec (length (bld_stiffnesses b)) (length (bld_storeys b)));
+  destruct (Nat.eq_dec (length (bld_stiffnesses_x b)) (length (bld_storeys b)));
+  destruct (Nat.eq_dec (length (bld_stiffnesses_y b)) (length (bld_storeys b)));
+  destruct (Nat.eq_dec (length (bld_weights b)) (length (bld_storeys b)));
+  destruct (Nat.eq_dec (length (bld_plan_areas b)) (length (bld_storeys b)));
   destruct (strictly_increasing_dec (bld_storeys b));
   destruct (Forall_dec (fun s => st_m s > 0) (fun s => Rgt_dec (st_m s) 0)
               (bld_storeys b));
   destruct (Forall_dec (fun k => k > 0) (fun k => Rgt_dec k 0)
-              (bld_stiffnesses b));
-  destruct (Rgt_dec (bld_T1 b) 0);
+              (bld_stiffnesses_x b));
+  destruct (Forall_dec (fun k => k > 0) (fun k => Rgt_dec k 0)
+              (bld_stiffnesses_y b));
+  destruct (Forall_dec (fun w => w > 0) (fun w => Rgt_dec w 0)
+              (bld_weights b));
+  destruct (Forall_dec (fun a => a > 0) (fun a => Rgt_dec a 0)
+              (bld_plan_areas b));
+  destruct (Rgt_dec (bld_T1_x b) 0);
+  destruct (Rgt_dec (bld_T1_y b) 0);
   destruct (Rge_dec (bld_au_a1 b) 1);
   try (left; tauto); right; tauto.
 Defined.
 
-Theorem ec8_compliant_dec : forall b sp sds,
-  { ec8_compliant b sp sds } + { ~ ec8_compliant b sp sds }.
+Theorem ec8_compliant_dec : forall b sp,
+  { ec8_compliant b sp } + { ~ ec8_compliant b sp }.
 Proof.
   intros. unfold ec8_compliant.
+  set (sds_x := compute_storey_data b sp (bld_stiffnesses_x b) (bld_T1_x b)).
+  set (sds_y := compute_storey_data b sp (bld_stiffnesses_y b) (bld_T1_y b)).
   destruct (well_formed_building_dec b);
   destruct (well_formed_spectrum_dec (spar_sp sp));
   destruct (Req_EM_T (spar_q sp) (q0 (bld_dc b) (bld_ss b) (bld_au_a1 b)));
-  destruct (Rge_dec (spar_eta sp) eta_min);
+  destruct (Rge_dec (spar_xi sp) 0);
   destruct (Rgt_dec (spar_agR sp) 0);
-  destruct (storey_data_consistent_dec (bld_storeys b) sds);
   destruct (plan_regular_dec (bld_e0x b) (bld_e0y b)
-              (bld_rx b) (bld_ry b) (bld_ls b));
-  destruct (elevation_regular_dec (bld_masses b) (bld_stiffnesses b));
-  destruct (Rle_dec (bld_T1 b) (4 * sp_TC (spar_sp sp)));
-  destruct (all_drifts_ok_dec (spar_ic sp) (spar_ns_cat sp) sds);
-  destruct (all_pdelta_ok_dec (pdelta_theta_max (spar_pda sp)) sds);
+              (bld_rx b) (bld_ry b) (bld_ls b) (bld_compactness b));
+  destruct (elevation_regular_dec (bld_masses b) (bld_stiffnesses_x b)
+              (bld_plan_areas b));
+  destruct (elevation_regular_dec (bld_masses b) (bld_stiffnesses_y b)
+              (bld_plan_areas b));
+  destruct (Rle_dec (bld_T1_x b) (4 * sp_TC (spar_sp sp)));
+  destruct (Rle_dec (bld_T1_y b) (4 * sp_TC (spar_sp sp)));
+  destruct (all_drifts_ok_dec (spar_ic sp) (spar_ns_cat sp) sds_x);
+  destruct (all_drifts_ok_dec (spar_ic sp) (spar_ns_cat sp) sds_y);
+  destruct (all_pdelta_ok_dec (pdelta_theta_max (spar_pda sp)) sds_x);
+  destruct (all_pdelta_ok_dec (pdelta_theta_max (spar_pda sp)) sds_y);
   try (left; tauto); right; tauto.
 Defined.
 
@@ -1316,14 +1534,18 @@ Extract Inlined Constant Rmax => "(fun a b -> if a >= b then a else b)".
 Extract Inlined Constant Rgt_dec => "(fun a b -> if a > b then true else false)".
 Extract Inlined Constant Rlt_dec => "(fun a b -> if a < b then true else false)".
 Extract Inlined Constant Req_EM_T => "(fun a b -> if a = b then true else false)".
+Extract Inlined Constant sqrt => "sqrt".
 Extract Inlined Constant ClassicalDedekindReals.sig_forall_dec => "(fun _ -> None)".
 
 Set Extraction Output Directory ".".
 
 Extraction "eurocode8.ml"
-  ec8_compliant_dec
-  Se Sd Fb Fi
-  storey_forces
+  ec8_compliant_dec compute_storey_data
+  Se Sd Sve Fb Fi
+  combine_srss combine_30pct
+  storey_forces storey_shears storey_heights storey_gravities storey_drifts
   spectrum_lookup gamma_I q0
+  compute_eta
+  torsion_amplification
   classify_pdelta pdelta_amplification pdelta_theta_max
   drift_limit nu lambda.
